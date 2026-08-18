@@ -1,50 +1,59 @@
-export default {
-  async fetch(request) {
+export default async function handler(req, res) {
     try {
-      const response = await fetch(
-        "https://opendata.adsb.fi/api/v3/lat/50.1008/lon/14.2600/dist/10"
-      );
+        const apiKey = process.env.ADSBX_API_KEY;
 
-      if (!response.ok) {
-        return new Response(
-          JSON.stringify({
-            error: "Upstream API error",
-            status: response.status
-          }),
-          {
-            status: response.status,
-            headers: {
-              "Content-Type": "application/json",
-              "Access-Control-Allow-Origin": "*"
-            }
-          }
-        );
-      }
-
-      const data = await response.text();
-
-      return new Response(data, {
-        status: 200,
-        headers: {
-           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-          "Cache-Control": "no-store"
+        if (!apiKey) {
+            return res.status(500).json({
+                status: "ERROR",
+                message: "ADSBX_API_KEY is missing"
+            });
         }
-      });
+
+        const lat = "50.1008";
+        const lon = "14.2600";
+        const dist = "10";
+
+        const url =
+            `https://adsbexchange-com1.p.rapidapi.com/v2/lat/${lat}/lon/${lon}/dist/${dist}/`;
+
+        const response = await fetch(url, {
+            method: "GET",
+            headers: {
+                "X-RapidAPI-Key": apiKey,
+                "X-RapidAPI-Host": "adsbexchange-com1.p.rapidapi.com"
+            }
+        });
+
+        const text = await response.text();
+
+        if (!response.ok) {
+            return res.status(response.status).json({
+                status: "ERROR",
+                upstreamStatus: response.status,
+                upstreamText: text
+            });
+        }
+
+        let data;
+
+        try {
+            data = JSON.parse(text);
+        } catch {
+            return res.status(500).json({
+                status: "ERROR",
+                message: "Could not parse ADS-B Exchange response",
+                upstreamText: text
+            });
+        }
+
+        res.setHeader("Cache-Control", "no-store");
+
+        return res.status(200).json(data);
 
     } catch (error) {
-      return new Response(
-        JSON.stringify({
-          error: error.message
-        }),
-        {
-          status: 500,
-          headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
-          }
-        }
-      );
+        return res.status(500).json({
+            status: "ERROR",
+            message: error.message
+        });
     }
-  }
-};
+}
