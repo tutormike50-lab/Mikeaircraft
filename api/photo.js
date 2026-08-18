@@ -10,19 +10,21 @@ export default async function handler(req, res) {
 
   try {
 
-    const url =
-      "https://api.planespotters.net/pub/photos/hex/" +
-      encodeURIComponent(hex);
+    const cleanHex =
+      String(hex)
+      .trim()
+      .toUpperCase();
 
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "MikePlanes/1.0"
-      }
-    });
+    const url =
+      "https://airport-data.com/api/ac_thumb.json?m=" +
+      encodeURIComponent(cleanHex) +
+      "&n=1";
+
+    const response = await fetch(url);
 
     if (!response.ok) {
       return res.status(response.status).json({
-        error: "Planespotters returned " + response.status
+        error: "Airport-Data returned " + response.status
       });
     }
 
@@ -30,7 +32,7 @@ export default async function handler(req, res) {
 
     res.setHeader(
       "Cache-Control",
-      "s-maxage=86400, stale-while-revalidate"
+      "s-maxage=86400, stale-while-revalidate=604800"
     );
 
     return res.status(200).json(data);
