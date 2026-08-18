@@ -28,7 +28,7 @@ export default {
         headers: {
            "Content-Type": "application/json",
           "Access-Control-Allow-Origin": "*",
-          "Cache-Control": "s-maxage=30, stale-while-revalidate=60"
+          "Cache-Control": "no-store"
         }
       });
 
