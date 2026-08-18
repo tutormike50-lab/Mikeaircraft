@@ -1,5 +1,15 @@
 export default async function handler(req, res) {
 
+  // Allow the GitHub Pages ribbon/debug page to call this API
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  // Handle browser preflight request
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
   const { hex } = req.query;
 
   if (!hex) {
@@ -12,8 +22,8 @@ export default async function handler(req, res) {
 
     const cleanHex =
       String(hex)
-      .trim()
-      .toUpperCase();
+        .trim()
+        .toUpperCase();
 
     const url =
       "https://airport-data.com/api/ac_thumb.json?m=" +
