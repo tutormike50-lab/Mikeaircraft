@@ -7,6 +7,7 @@ module.exports = async function handler(req, res) {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+
   <meta
     name="viewport"
     content="width=device-width, initial-scale=1.0"
@@ -49,7 +50,7 @@ module.exports = async function handler(req, res) {
     }
 
     .container {
-      max-width: 1200px;
+      max-width: 1250px;
       margin: auto;
       padding: 28px;
     }
@@ -158,7 +159,15 @@ module.exports = async function handler(req, res) {
     .targetName {
       font-size: 27px;
       font-weight: bold;
-      margin-bottom: 7px;
+      margin-bottom: 3px;
+    }
+
+    .operatorName {
+      color: #d2deea;
+      font-size: 16px;
+      font-weight: bold;
+      margin-bottom: 8px;
+      min-height: 19px;
     }
 
     .targetState {
@@ -222,7 +231,7 @@ module.exports = async function handler(req, res) {
   <div class="header">
     <h1>✈ MikeAircraft Engine Monitor</h1>
     <p>
-      Engine v2 • CURRENT / NEXT IN / NEXT OUT
+      Engine v2 • Selection + Airline Enrichment
     </p>
   </div>
 
@@ -308,12 +317,16 @@ module.exports = async function handler(req, res) {
 
       <div class="row">
         <span class="label">Current request</span>
-        <span id="requestState" class="value">IDLE</span>
+        <span id="requestState" class="value">
+          IDLE
+        </span>
       </div>
 
       <div class="row">
         <span class="label">Automatic retry</span>
-        <span class="value good">Every 5 seconds</span>
+        <span class="value good">
+          Every 5 seconds
+        </span>
       </div>
 
     </div>
@@ -388,10 +401,22 @@ module.exports = async function handler(req, res) {
           </div>
 
           <div
+            id="currentOperator"
+            class="operatorName"
+          >
+            ---
+          </div>
+
+          <div
             id="currentState"
             class="targetState current"
           >
             Waiting...
+          </div>
+
+          <div class="targetDetail">
+            <span>Published display</span>
+            <strong id="currentFlight">---</strong>
           </div>
 
           <div class="targetDetail">
@@ -458,10 +483,22 @@ module.exports = async function handler(req, res) {
           </div>
 
           <div
+            id="inOperator"
+            class="operatorName"
+          >
+            ---
+          </div>
+
+          <div
             id="inState"
             class="targetState arrival"
           >
             Waiting...
+          </div>
+
+          <div class="targetDetail">
+            <span>Published display</span>
+            <strong id="inFlight">---</strong>
           </div>
 
           <div class="targetDetail">
@@ -523,10 +560,22 @@ module.exports = async function handler(req, res) {
           </div>
 
           <div
+            id="outOperator"
+            class="operatorName"
+          >
+            ---
+          </div>
+
+          <div
             id="outState"
             class="targetState departure"
           >
             Waiting...
+          </div>
+
+          <div class="targetDetail">
+            <span>Published display</span>
+            <strong id="outFlight">---</strong>
           </div>
 
           <div class="targetDetail">
@@ -592,13 +641,15 @@ module.exports = async function handler(req, res) {
 
       <div class="row">
         <span class="label">Memory error</span>
-        <span id="memoryError" class="value">NONE</span>
+        <span id="memoryError" class="value">
+          NONE
+        </span>
       </div>
 
     </div>
 
     <div class="footer">
-      MikeAircraft Engine v2 • Selection Monitor
+      MikeAircraft Engine v2 • Selection + Enrichment Monitor
     </div>
 
   </div>
@@ -612,6 +663,9 @@ module.exports = async function handler(req, res) {
   let successfulPolls = 0;
   let consecutiveErrors = 0;
   let lastSuccessTime = null;
+
+  const enrichmentCache =
+    new Map();
 
   function text(id, value) {
     const element =
@@ -630,7 +684,8 @@ module.exports = async function handler(req, res) {
       return;
     }
 
-    element.textContent = value;
+    element.textContent =
+      value;
 
     element.className =
       "value " +
@@ -643,26 +698,90 @@ module.exports = async function handler(req, res) {
       );
   }
 
-  function showTarget(
+  async function enrichCallsign(callsign) {
+    const key =
+      String(callsign || "")
+        .trim()
+        .toUpperCase();
+
+    if (!key) {
+      return null;
+    }
+
+    if (
+      enrichmentCache.has(key)
+    ) {
+      return enrichmentCache.get(key);
+    }
+
+    try {
+      const response =
+        await fetch(
+          "/api/enrich?callsign=" +
+          encodeURIComponent(key),
+          {
+            cache: "no-store"
+          }
+        );
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const data =
+        await response.json();
+
+      if (!data.ok) {
+        return null;
+      }
+
+      enrichmentCache.set(
+        key,
+        data
+      );
+
+      return data;
+    }
+    catch {
+      return null;
+    }
+  }
+
+  function clearTarget(
+    prefix,
+    showScore = false
+  ) {
+    text(prefix + "Name", "NONE");
+    text(prefix + "Operator", "---");
+    text(prefix + "Flight", "---");
+    text(prefix + "State", "No candidate");
+    text(prefix + "Reg", "---");
+    text(prefix + "Type", "---");
+    text(prefix + "Runway", "---");
+    text(prefix + "Distance", "---");
+    text(prefix + "Threshold", "---");
+    text(prefix + "Altitude", "---");
+    text(prefix + "Speed", "---");
+    text(prefix + "Confidence", "---");
+
+    if (showScore) {
+      text(
+        prefix + "Score",
+        "---"
+      );
+    }
+  }
+
+  async function showTarget(
     prefix,
     target,
     showScore = false
   ) {
     if (!target) {
-      text(prefix + "Name", "NONE");
-      text(prefix + "State", "No candidate");
-      text(prefix + "Reg", "---");
-      text(prefix + "Type", "---");
-      text(prefix + "Runway", "---");
-      text(prefix + "Distance", "---");
-      text(prefix + "Threshold", "---");
-      text(prefix + "Altitude", "---");
-      text(prefix + "Speed", "---");
-      text(prefix + "Confidence", "---");
-
-      if (showScore) {
-        text(prefix + "Score", "---");
-      }
+      clearTarget(
+        prefix,
+        showScore
+      );
 
       return;
     }
@@ -673,6 +792,16 @@ module.exports = async function handler(req, res) {
       target.registration ||
       target.id ||
       "UNKNOWN"
+    );
+
+    text(
+      prefix + "Operator",
+      "Identifying operator..."
+    );
+
+    text(
+      prefix + "Flight",
+      "---"
     );
 
     text(
@@ -738,9 +867,70 @@ module.exports = async function handler(req, res) {
           : "---"
       );
     }
+
+    const originalCallsign =
+      target.callsign;
+
+    const enrichment =
+      await enrichCallsign(
+        originalCallsign
+      );
+
+    // Make sure the card hasn't switched aircraft while
+    // the enrichment request was in flight.
+    const currentCardCallsign =
+      document
+        .getElementById(
+          prefix + "Name"
+        )
+        ?.textContent;
+
+    if (
+      currentCardCallsign !==
+      (
+        originalCallsign ||
+        target.registration ||
+        target.id ||
+        "UNKNOWN"
+      )
+    ) {
+      return;
+    }
+
+    if (
+      enrichment &&
+      enrichment.operator &&
+      enrichment.operator.identified
+    ) {
+      text(
+        prefix + "Operator",
+        enrichment.operator.name
+      );
+
+      text(
+        prefix + "Flight",
+        enrichment.flight?.display ||
+        originalCallsign ||
+        "---"
+      );
+    }
+    else {
+      text(
+        prefix + "Operator",
+        "Operator not identified"
+      );
+
+      text(
+        prefix + "Flight",
+        originalCallsign ||
+        "---"
+      );
+    }
   }
 
-  function showStates(stateCounts) {
+  function showStates(
+    stateCounts
+  ) {
     const container =
       document.getElementById(
         "stateList"
@@ -880,7 +1070,6 @@ module.exports = async function handler(req, res) {
           +
           "&t=" +
           Date.now(),
-
           {
             cache: "no-store",
             signal: controller.signal
@@ -1001,21 +1190,23 @@ module.exports = async function handler(req, res) {
         intelligence.stateCounts
       );
 
-      showTarget(
-        "current",
-        intelligence.current,
-        true
-      );
+      await Promise.all([
+        showTarget(
+          "current",
+          intelligence.current,
+          true
+        ),
 
-      showTarget(
-        "in",
-        intelligence.nextIn
-      );
+        showTarget(
+          "in",
+          intelligence.nextIn
+        ),
 
-      showTarget(
-        "out",
-        intelligence.nextOut
-      );
+        showTarget(
+          "out",
+          intelligence.nextOut
+        )
+      ]);
 
       setStatus(
         "read",
