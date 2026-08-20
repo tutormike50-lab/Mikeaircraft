@@ -7,7 +7,6 @@ module.exports = async function handler(req, res) {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-
   <meta
     name="viewport"
     content="width=device-width, initial-scale=1.0"
@@ -166,8 +165,16 @@ module.exports = async function handler(req, res) {
       color: #d2deea;
       font-size: 16px;
       font-weight: bold;
-      margin-bottom: 8px;
+      margin-bottom: 5px;
       min-height: 19px;
+    }
+
+    .routeName {
+      color: #9fd7ff;
+      font-size: 17px;
+      font-weight: bold;
+      margin-bottom: 10px;
+      min-height: 21px;
     }
 
     .targetState {
@@ -231,7 +238,7 @@ module.exports = async function handler(req, res) {
   <div class="header">
     <h1>✈ MikeAircraft Engine Monitor</h1>
     <p>
-      Engine v2 • Selection + Airline Enrichment
+      Engine v2 • Movement + Airline + Route Enrichment
     </p>
   </div>
 
@@ -341,30 +348,21 @@ module.exports = async function handler(req, res) {
         <span class="label">
           Aircraft currently tracked
         </span>
-
-        <span id="aircraft" class="value big">
-          0
-        </span>
+        <span id="aircraft" class="value big">0</span>
       </div>
 
       <div class="row">
         <span class="label">
           Persistent aircraft histories
         </span>
-
-        <span id="histories" class="value big">
-          0
-        </span>
+        <span id="histories" class="value big">0</span>
       </div>
 
       <div class="row">
         <span class="label">
           Filtered non-aircraft / junk targets
         </span>
-
-        <span id="filteredOut" class="value">
-          0
-        </span>
+        <span id="filteredOut" class="value">0</span>
       </div>
 
     </div>
@@ -386,36 +384,28 @@ module.exports = async function handler(req, res) {
     <div class="selectionGrid">
 
       <div class="card">
-
-        <div class="cardTitle">
-          CURRENT
-        </div>
+        <div class="cardTitle">CURRENT</div>
 
         <div class="targetBox">
 
-          <div
-            id="currentName"
-            class="targetName current"
-          >
+          <div id="currentName" class="targetName current">
             NONE
           </div>
 
-          <div
-            id="currentOperator"
-            class="operatorName"
-          >
+          <div id="currentOperator" class="operatorName">
             ---
           </div>
 
-          <div
-            id="currentState"
-            class="targetState current"
-          >
+          <div id="currentRoute" class="routeName">
+            ---
+          </div>
+
+          <div id="currentState" class="targetState current">
             Waiting...
           </div>
 
           <div class="targetDetail">
-            <span>Published display</span>
+            <span>Display flight</span>
             <strong id="currentFlight">---</strong>
           </div>
 
@@ -468,36 +458,28 @@ module.exports = async function handler(req, res) {
       </div>
 
       <div class="card">
-
-        <div class="cardTitle">
-          NEXT IN
-        </div>
+        <div class="cardTitle">NEXT IN</div>
 
         <div class="targetBox">
 
-          <div
-            id="inName"
-            class="targetName arrival"
-          >
+          <div id="inName" class="targetName arrival">
             NONE
           </div>
 
-          <div
-            id="inOperator"
-            class="operatorName"
-          >
+          <div id="inOperator" class="operatorName">
             ---
           </div>
 
-          <div
-            id="inState"
-            class="targetState arrival"
-          >
+          <div id="inRoute" class="routeName">
+            ---
+          </div>
+
+          <div id="inState" class="targetState arrival">
             Waiting...
           </div>
 
           <div class="targetDetail">
-            <span>Published display</span>
+            <span>Display flight</span>
             <strong id="inFlight">---</strong>
           </div>
 
@@ -545,36 +527,28 @@ module.exports = async function handler(req, res) {
       </div>
 
       <div class="card">
-
-        <div class="cardTitle">
-          NEXT OUT
-        </div>
+        <div class="cardTitle">NEXT OUT</div>
 
         <div class="targetBox">
 
-          <div
-            id="outName"
-            class="targetName departure"
-          >
+          <div id="outName" class="targetName departure">
             NONE
           </div>
 
-          <div
-            id="outOperator"
-            class="operatorName"
-          >
+          <div id="outOperator" class="operatorName">
             ---
           </div>
 
-          <div
-            id="outState"
-            class="targetState departure"
-          >
+          <div id="outRoute" class="routeName">
+            ---
+          </div>
+
+          <div id="outState" class="targetState departure">
             Waiting...
           </div>
 
           <div class="targetDetail">
-            <span>Published display</span>
+            <span>Display flight</span>
             <strong id="outFlight">---</strong>
           </div>
 
@@ -649,7 +623,7 @@ module.exports = async function handler(req, res) {
     </div>
 
     <div class="footer">
-      MikeAircraft Engine v2 • Selection + Enrichment Monitor
+      MikeAircraft Engine v2 • Route Enrichment Monitor
     </div>
 
   </div>
@@ -664,30 +638,27 @@ module.exports = async function handler(req, res) {
   let consecutiveErrors = 0;
   let lastSuccessTime = null;
 
-  const enrichmentCache =
-    new Map();
+  const enrichmentCache = new Map();
+  const routeCache = new Map();
 
   function text(id, value) {
-    const element =
-      document.getElementById(id);
+    const el = document.getElementById(id);
 
-    if (element) {
-      element.textContent = value;
+    if (el) {
+      el.textContent = value;
     }
   }
 
   function setStatus(id, value, good) {
-    const element =
-      document.getElementById(id);
+    const el = document.getElementById(id);
 
-    if (!element) {
+    if (!el) {
       return;
     }
 
-    element.textContent =
-      value;
+    el.textContent = value;
 
-    element.className =
+    el.className =
       "value " +
       (
         good === true
@@ -708,9 +679,7 @@ module.exports = async function handler(req, res) {
       return null;
     }
 
-    if (
-      enrichmentCache.has(key)
-    ) {
+    if (enrichmentCache.has(key)) {
       return enrichmentCache.get(key);
     }
 
@@ -747,12 +716,91 @@ module.exports = async function handler(req, res) {
     }
   }
 
+  async function lookupRoute(callsign) {
+    const key =
+      String(callsign || "")
+        .trim()
+        .toUpperCase();
+
+    if (!key) {
+      return null;
+    }
+
+    if (routeCache.has(key)) {
+      return routeCache.get(key);
+    }
+
+    try {
+      const controller =
+        new AbortController();
+
+      const timeout =
+        setTimeout(
+          () => controller.abort(),
+          7000
+        );
+
+      let response;
+
+      try {
+        response =
+          await fetch(
+            "/api/route?callsign=" +
+            encodeURIComponent(key),
+            {
+              cache: "no-store",
+              signal: controller.signal
+            }
+          );
+      }
+      finally {
+        clearTimeout(timeout);
+      }
+
+      if (!response.ok) {
+        routeCache.set(
+          key,
+          null
+        );
+
+        return null;
+      }
+
+      const data =
+        await response.json();
+
+      if (
+        !data.ok ||
+        !data.routeFound ||
+        !data.route
+      ) {
+        routeCache.set(
+          key,
+          null
+        );
+
+        return null;
+      }
+
+      routeCache.set(
+        key,
+        data.route
+      );
+
+      return data.route;
+    }
+    catch {
+      return null;
+    }
+  }
+
   function clearTarget(
     prefix,
     showScore = false
   ) {
     text(prefix + "Name", "NONE");
     text(prefix + "Operator", "---");
+    text(prefix + "Route", "---");
     text(prefix + "Flight", "---");
     text(prefix + "State", "No candidate");
     text(prefix + "Reg", "---");
@@ -765,10 +813,7 @@ module.exports = async function handler(req, res) {
     text(prefix + "Confidence", "---");
 
     if (showScore) {
-      text(
-        prefix + "Score",
-        "---"
-      );
+      text(prefix + "Score", "---");
     }
   }
 
@@ -786,12 +831,15 @@ module.exports = async function handler(req, res) {
       return;
     }
 
-    text(
-      prefix + "Name",
+    const identity =
       target.callsign ||
       target.registration ||
       target.id ||
-      "UNKNOWN"
+      "UNKNOWN";
+
+    text(
+      prefix + "Name",
+      identity
     );
 
     text(
@@ -800,8 +848,13 @@ module.exports = async function handler(req, res) {
     );
 
     text(
+      prefix + "Route",
+      "Looking up route..."
+    );
+
+    text(
       prefix + "Flight",
-      "---"
+      target.callsign || "---"
     );
 
     text(
@@ -868,17 +921,22 @@ module.exports = async function handler(req, res) {
       );
     }
 
-    const originalCallsign =
+    const callsign =
       target.callsign;
 
-    const enrichment =
-      await enrichCallsign(
-        originalCallsign
-      );
+    const results =
+      await Promise.all([
+        enrichCallsign(callsign),
+        lookupRoute(callsign)
+      ]);
 
-    // Make sure the card hasn't switched aircraft while
-    // the enrichment request was in flight.
-    const currentCardCallsign =
+    const enrichment =
+      results[0];
+
+    const route =
+      results[1];
+
+    const cardIdentity =
       document
         .getElementById(
           prefix + "Name"
@@ -886,18 +944,22 @@ module.exports = async function handler(req, res) {
         ?.textContent;
 
     if (
-      currentCardCallsign !==
-      (
-        originalCallsign ||
-        target.registration ||
-        target.id ||
-        "UNKNOWN"
-      )
+      cardIdentity !== identity
     ) {
       return;
     }
 
     if (
+      route &&
+      route.airline &&
+      route.airline.name
+    ) {
+      text(
+        prefix + "Operator",
+        route.airline.name
+      );
+    }
+    else if (
       enrichment &&
       enrichment.operator &&
       enrichment.operator.identified
@@ -906,31 +968,65 @@ module.exports = async function handler(req, res) {
         prefix + "Operator",
         enrichment.operator.name
       );
-
-      text(
-        prefix + "Flight",
-        enrichment.flight?.display ||
-        originalCallsign ||
-        "---"
-      );
     }
     else {
       text(
         prefix + "Operator",
         "Operator not identified"
       );
+    }
+
+    if (
+      route &&
+      route.origin &&
+      route.destination
+    ) {
+      const origin =
+        route.origin.iata_code ||
+        route.origin.icao_code ||
+        "?";
+
+      const destination =
+        route.destination.iata_code ||
+        route.destination.icao_code ||
+        "?";
+
+      text(
+        prefix + "Route",
+        origin +
+        " → " +
+        destination
+      );
 
       text(
         prefix + "Flight",
-        originalCallsign ||
+        route.callsign_iata ||
+        route.callsign ||
+        callsign ||
         "---"
       );
     }
+    else {
+      text(
+        prefix + "Route",
+        "Route not found"
+      );
+
+      if (
+        enrichment &&
+        enrichment.flight
+      ) {
+        text(
+          prefix + "Flight",
+          enrichment.flight.display ||
+          callsign ||
+          "---"
+        );
+      }
+    }
   }
 
-  function showStates(
-    stateCounts
-  ) {
+  function showStates(stateCounts) {
     const container =
       document.getElementById(
         "stateList"
@@ -1064,10 +1160,7 @@ module.exports = async function handler(req, res) {
       const response =
         await fetch(
           "/api/engine?airport=" +
-          encodeURIComponent(
-            airport
-          )
-          +
+          encodeURIComponent(airport) +
           "&t=" +
           Date.now(),
           {
