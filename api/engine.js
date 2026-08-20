@@ -1426,18 +1426,34 @@ module.exports = async function handler(req, res) {
 
           .slice(-24);
 
-      const decision =
-        classify(
-          ac,
-          track.samples,
-          track.state
-        );
+   let decision =
+  classify(
+    ac,
+    track.samples,
+    track.state
+  );
 
-      if (
-        decision.state !==
-        track.state
-      ) {
+// Keep a landed aircraft in the LANDED state
+// for 90 seconds after touchdown.
+// This stops the arrival disappearing immediately.
+if (
+  track.state === "LANDED"
+  &&
+  ac.onGround
+  &&
+  now - track.stateSince < 90000
+) {
+  decision = {
+    state: "LANDED",
+    confidence: 98,
+    reason: "Post-landing hold during rollout"
+  };
+}
 
+if (
+  decision.state !==
+  track.state
+) {
         track.state =
           decision.state;
 
