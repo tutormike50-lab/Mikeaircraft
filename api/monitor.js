@@ -7,7 +7,6 @@ module.exports = async function handler(req, res) {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-
   <meta
     name="viewport"
     content="width=device-width, initial-scale=1.0"
@@ -50,7 +49,7 @@ module.exports = async function handler(req, res) {
     }
 
     .container {
-      max-width: 1100px;
+      max-width: 1200px;
       margin: auto;
       padding: 28px;
     }
@@ -131,49 +130,6 @@ module.exports = async function handler(req, res) {
       margin-bottom: 20px;
     }
 
-    .trafficGrid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 22px;
-    }
-
-    .targetBox {
-      padding: 18px;
-    }
-
-    .targetName {
-      font-size: 28px;
-      font-weight: bold;
-      margin-bottom: 7px;
-    }
-
-    .targetState {
-      font-size: 16px;
-      font-weight: bold;
-      margin-bottom: 15px;
-    }
-
-    .targetDetail {
-      display: flex;
-      justify-content: space-between;
-      gap: 20px;
-      border-top: 1px solid #273240;
-      padding: 9px 0;
-      font-size: 14px;
-    }
-
-    .targetDetail span:first-child {
-      color: #9fb0c2;
-    }
-
-    .arrival {
-      color: #54d7ff;
-    }
-
-    .departure {
-      color: #ffbd5b;
-    }
-
     .stateList {
       display: flex;
       flex-wrap: wrap;
@@ -189,6 +145,53 @@ module.exports = async function handler(req, res) {
       font-size: 13px;
     }
 
+    .selectionGrid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 22px;
+    }
+
+    .targetBox {
+      padding: 18px;
+    }
+
+    .targetName {
+      font-size: 27px;
+      font-weight: bold;
+      margin-bottom: 7px;
+    }
+
+    .targetState {
+      font-size: 15px;
+      font-weight: bold;
+      margin-bottom: 15px;
+    }
+
+    .targetDetail {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      border-top: 1px solid #273240;
+      padding: 9px 0;
+      font-size: 14px;
+    }
+
+    .targetDetail span:first-child {
+      color: #9fb0c2;
+    }
+
+    .current {
+      color: #65e69a;
+    }
+
+    .arrival {
+      color: #54d7ff;
+    }
+
+    .departure {
+      color: #ffbd5b;
+    }
+
     .pulse {
       display: inline-block;
       width: 9px;
@@ -199,16 +202,6 @@ module.exports = async function handler(req, res) {
       box-shadow: 0 0 8px #57dc91;
     }
 
-    .pulseWarning {
-      background: #ffd65a;
-      box-shadow: 0 0 8px #ffd65a;
-    }
-
-    .pulseBad {
-      background: #ff6e6e;
-      box-shadow: 0 0 8px #ff6e6e;
-    }
-
     .footer {
       color: #74879a;
       font-size: 12px;
@@ -216,8 +209,8 @@ module.exports = async function handler(req, res) {
       margin-top: 18px;
     }
 
-    @media (max-width: 800px) {
-      .trafficGrid {
+    @media (max-width: 950px) {
+      .selectionGrid {
         grid-template-columns: 1fr;
       }
     }
@@ -229,7 +222,7 @@ module.exports = async function handler(req, res) {
   <div class="header">
     <h1>✈ MikeAircraft Engine Monitor</h1>
     <p>
-      Engine v2 • Resilient State Tracking Dashboard
+      Engine v2 • CURRENT / NEXT IN / NEXT OUT
     </p>
   </div>
 
@@ -315,16 +308,12 @@ module.exports = async function handler(req, res) {
 
       <div class="row">
         <span class="label">Current request</span>
-        <span id="requestState" class="value">
-          IDLE
-        </span>
+        <span id="requestState" class="value">IDLE</span>
       </div>
 
       <div class="row">
         <span class="label">Automatic retry</span>
-        <span class="value good">
-          Every 5 seconds
-        </span>
+        <span class="value good">Every 5 seconds</span>
       </div>
 
     </div>
@@ -355,6 +344,16 @@ module.exports = async function handler(req, res) {
         </span>
       </div>
 
+      <div class="row">
+        <span class="label">
+          Filtered non-aircraft / junk targets
+        </span>
+
+        <span id="filteredOut" class="value">
+          0
+        </span>
+      </div>
+
     </div>
 
     <div class="card">
@@ -371,68 +370,73 @@ module.exports = async function handler(req, res) {
 
     </div>
 
-    <div class="trafficGrid">
+    <div class="selectionGrid">
 
       <div class="card">
 
         <div class="cardTitle">
-          NEXT ARRIVAL
+          CURRENT
         </div>
 
         <div class="targetBox">
 
           <div
-            id="arrivalName"
-            class="targetName arrival"
+            id="currentName"
+            class="targetName current"
           >
             NONE
           </div>
 
           <div
-            id="arrivalState"
-            class="targetState arrival"
+            id="currentState"
+            class="targetState current"
           >
             Waiting...
           </div>
 
           <div class="targetDetail">
             <span>Registration</span>
-            <strong id="arrivalReg">---</strong>
+            <strong id="currentReg">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Aircraft type</span>
-            <strong id="arrivalType">---</strong>
+            <strong id="currentType">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Runway</span>
-            <strong id="arrivalRunway">---</strong>
+            <strong id="currentRunway">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Airport distance</span>
-            <strong id="arrivalDistance">---</strong>
+            <strong id="currentDistance">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Threshold distance</span>
-            <strong id="arrivalThreshold">---</strong>
+            <strong id="currentThreshold">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Altitude</span>
-            <strong id="arrivalAltitude">---</strong>
+            <strong id="currentAltitude">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Speed</span>
-            <strong id="arrivalSpeed">---</strong>
+            <strong id="currentSpeed">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Confidence</span>
-            <strong id="arrivalConfidence">---</strong>
+            <strong id="currentConfidence">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Relevance score</span>
+            <strong id="currentScore">---</strong>
           </div>
 
         </div>
@@ -441,20 +445,85 @@ module.exports = async function handler(req, res) {
       <div class="card">
 
         <div class="cardTitle">
-          NEXT DEPARTURE
+          NEXT IN
         </div>
 
         <div class="targetBox">
 
           <div
-            id="departureName"
+            id="inName"
+            class="targetName arrival"
+          >
+            NONE
+          </div>
+
+          <div
+            id="inState"
+            class="targetState arrival"
+          >
+            Waiting...
+          </div>
+
+          <div class="targetDetail">
+            <span>Registration</span>
+            <strong id="inReg">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Aircraft type</span>
+            <strong id="inType">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Runway</span>
+            <strong id="inRunway">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Airport distance</span>
+            <strong id="inDistance">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Threshold distance</span>
+            <strong id="inThreshold">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Altitude</span>
+            <strong id="inAltitude">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Speed</span>
+            <strong id="inSpeed">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Confidence</span>
+            <strong id="inConfidence">---</strong>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="card">
+
+        <div class="cardTitle">
+          NEXT OUT
+        </div>
+
+        <div class="targetBox">
+
+          <div
+            id="outName"
             class="targetName departure"
           >
             NONE
           </div>
 
           <div
-            id="departureState"
+            id="outState"
             class="targetState departure"
           >
             Waiting...
@@ -462,37 +531,42 @@ module.exports = async function handler(req, res) {
 
           <div class="targetDetail">
             <span>Registration</span>
-            <strong id="departureReg">---</strong>
+            <strong id="outReg">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Aircraft type</span>
-            <strong id="departureType">---</strong>
+            <strong id="outType">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Runway</span>
-            <strong id="departureRunway">---</strong>
+            <strong id="outRunway">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Airport distance</span>
-            <strong id="departureDistance">---</strong>
+            <strong id="outDistance">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Threshold distance</span>
+            <strong id="outThreshold">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Altitude</span>
-            <strong id="departureAltitude">---</strong>
+            <strong id="outAltitude">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Speed</span>
-            <strong id="departureSpeed">---</strong>
+            <strong id="outSpeed">---</strong>
           </div>
 
           <div class="targetDetail">
             <span>Confidence</span>
-            <strong id="departureConfidence">---</strong>
+            <strong id="outConfidence">---</strong>
           </div>
 
         </div>
@@ -518,15 +592,13 @@ module.exports = async function handler(req, res) {
 
       <div class="row">
         <span class="label">Memory error</span>
-        <span id="memoryError" class="value">
-          NONE
-        </span>
+        <span id="memoryError" class="value">NONE</span>
       </div>
 
     </div>
 
     <div class="footer">
-      MikeAircraft Engine v2 • Resilient Development Monitor
+      MikeAircraft Engine v2 • Selection Monitor
     </div>
 
   </div>
@@ -551,7 +623,6 @@ module.exports = async function handler(req, res) {
   }
 
   function setStatus(id, value, good) {
-
     const element =
       document.getElementById(id);
 
@@ -572,29 +643,25 @@ module.exports = async function handler(req, res) {
       );
   }
 
-  function showTarget(prefix, target) {
-
+  function showTarget(
+    prefix,
+    target,
+    showScore = false
+  ) {
     if (!target) {
-
       text(prefix + "Name", "NONE");
       text(prefix + "State", "No candidate");
       text(prefix + "Reg", "---");
       text(prefix + "Type", "---");
       text(prefix + "Runway", "---");
       text(prefix + "Distance", "---");
+      text(prefix + "Threshold", "---");
       text(prefix + "Altitude", "---");
       text(prefix + "Speed", "---");
       text(prefix + "Confidence", "---");
 
-      if (
-        document.getElementById(
-          prefix + "Threshold"
-        )
-      ) {
-        text(
-          prefix + "Threshold",
-          "---"
-        );
+      if (showScore) {
+        text(prefix + "Score", "---");
       }
 
       return;
@@ -635,18 +702,12 @@ module.exports = async function handler(req, res) {
         : "---"
     );
 
-    if (
-      document.getElementById(
-        prefix + "Threshold"
-      )
-    ) {
-      text(
-        prefix + "Threshold",
-        target.thresholdKm != null
-          ? target.thresholdKm + " km"
-          : "---"
-      );
-    }
+    text(
+      prefix + "Threshold",
+      target.thresholdKm != null
+        ? target.thresholdKm + " km"
+        : "---"
+    );
 
     text(
       prefix + "Altitude",
@@ -668,10 +729,18 @@ module.exports = async function handler(req, res) {
         ? target.confidence + "%"
         : "---"
     );
+
+    if (showScore) {
+      text(
+        prefix + "Score",
+        target.score != null
+          ? target.score
+          : "---"
+      );
+    }
   }
 
   function showStates(stateCounts) {
-
     const container =
       document.getElementById(
         "stateList"
@@ -685,7 +754,6 @@ module.exports = async function handler(req, res) {
       );
 
     if (!entries.length) {
-
       const pill =
         document.createElement(
           "span"
@@ -711,7 +779,6 @@ module.exports = async function handler(req, res) {
       )
       .forEach(
         ([state, count]) => {
-
           const pill =
             document.createElement(
               "span"
@@ -733,7 +800,6 @@ module.exports = async function handler(req, res) {
   }
 
   function updateAgeDisplay() {
-
     if (!lastSuccessTime) {
       setStatus(
         "lastAge",
@@ -776,7 +842,6 @@ module.exports = async function handler(req, res) {
   }
 
   async function updateMonitor() {
-
     if (busy) {
       return;
     }
@@ -806,7 +871,6 @@ module.exports = async function handler(req, res) {
       );
 
     try {
-
       const response =
         await fetch(
           "/api/engine?airport=" +
@@ -928,6 +992,31 @@ module.exports = async function handler(req, res) {
         0
       );
 
+      text(
+        "filteredOut",
+        traffic.filteredOut ?? 0
+      );
+
+      showStates(
+        intelligence.stateCounts
+      );
+
+      showTarget(
+        "current",
+        intelligence.current,
+        true
+      );
+
+      showTarget(
+        "in",
+        intelligence.nextIn
+      );
+
+      showTarget(
+        "out",
+        intelligence.nextOut
+      );
+
       setStatus(
         "read",
         memory.readOK
@@ -945,7 +1034,6 @@ module.exports = async function handler(req, res) {
       );
 
       if (memory.error) {
-
         text(
           "memoryError",
           memory.error
@@ -959,7 +1047,6 @@ module.exports = async function handler(req, res) {
             "value bad";
       }
       else {
-
         text(
           "memoryError",
           "NONE"
@@ -972,20 +1059,6 @@ module.exports = async function handler(req, res) {
           .className =
             "value good";
       }
-
-      showStates(
-        intelligence.stateCounts
-      );
-
-      showTarget(
-        "arrival",
-        intelligence.nextArrival
-      );
-
-      showTarget(
-        "departure",
-        intelligence.nextDeparture
-      );
 
       text(
         "lastUpdate",
@@ -1006,9 +1079,7 @@ module.exports = async function handler(req, res) {
         .style.display =
           "none";
     }
-
     catch (error) {
-
       consecutiveErrors++;
 
       text(
@@ -1052,11 +1123,8 @@ module.exports = async function handler(req, res) {
       box.style.display =
         "block";
     }
-
     finally {
-
       clearTimeout(timeout);
-
       busy = false;
     }
   }
@@ -1068,7 +1136,6 @@ module.exports = async function handler(req, res) {
     .addEventListener(
       "change",
       () => {
-
         successfulPolls = 0;
         consecutiveErrors = 0;
         lastSuccessTime = null;
