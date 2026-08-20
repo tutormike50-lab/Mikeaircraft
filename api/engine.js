@@ -1,18 +1,27 @@
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Cache-Control", "no-store");
 
   if (req.method === "OPTIONS") {
-    return res.status(200).end();
+    return res.status(204).end();
+  }
+
+  if (req.method !== "GET") {
+    return res.status(405).json({
+      ok: false,
+      error: "Method not allowed"
+    });
   }
 
   try {
-    // ---------------------------------------------
+    // =====================================================
     // MIKEAIRCRAFT ENGINE v2
-    // Stage 1: Live ADS-B aircraft ingestion
-    // ---------------------------------------------
+    // Stage 1: Live ADS-B ingestion
+    // =====================================================
 
-    const airports = {
+    const AIRPORTS = {
       PRG: {
         name: "Prague Airport",
         icao: "LKPR",
@@ -44,135 +53,221 @@ module.exports = async function handler(req, res) {
       CDG: {
         name: "Paris Charles de Gaulle",
         icao: "LFPG",
-        lat: 49.009750,
+        lat: 49.00975,
         lon: 2.562618
       },
 
       MAN: {
         name: "Manchester Airport",
         icao: "EGCC",
-        lat: 53.347150,
+        lat: 53.34715,
         lon: -2.283883
       }
     };
 
-    // Airport can later be selected from the tablet.
-    // For now PRG is the default.
-    const requestedAirport =
+    const requestedCode =
       String(req.query.airport || "PRG").toUpperCase();
 
     const airport =
-      airports[requestedAirport] || airports.PRG;
+      AIRPORTS[requestedCode] || AIRPORTS.PRG;
 
-    // Use the existing MikeAircraft nearby endpoint.
-    // This keeps ADS-B access in one place.
-    
-  const nearbyURL =
-  "https://mikeaircraft-azji1qie4-mikeplanes.vercel.app/api/nearby" + 
-  `?lat=${airport.lat}` +
-  `&lon=${airport.lon}` +
-  `&radius=20`;
-    const response = await fetch(nearbyURL, {
-      cache: "no-store"
-    });
+    const airportCode =
+      AIRPORTS[requestedCode] ? requestedCode : "PRG";
 
-    if (!response.ok) {
-      throw new Error(
-        `Nearby ADS-B feed returned HTTP ${response.status}`
-      );
+    const radius = 20;
+
+    // =====================================================
+    // DIRECT ADS-B SOURCES
+    // Engine v2 does not depend on nearby.js
+    // =====================================================
+
+    const sources = [
+      {
+        name: "adsb.lol",
+        url:
+          `https://api.adsb.lol/v2/point/` +
+          `${airport.lat}/${airport.lon}/${radius}`
+      },
+
+      {
+        name: "airplanes.live",
+        url:
+          `https://api.airplanes.live/v2/point/` +
+          `${airport.lat}/${airport.lon}/${radius}`
+      },
+
+      {
+        name: "adsb.fi",
+        url:
+          `https://opendata.adsb.fi/api/v2/lat/` +
+          `${airport.lat}/lon/${airport.lon}/dist/${radius}`
+      }
+    ];
+
+    let rawAircraft = null;
+    let sourceUsed = null;
+    const sourceErrors = [];
+
+    for (const source of sources) {
+      try {
+        const response = await fetch(source.url, {
+          cache: "no-store",
+          headers: {
+            "User-Agent": "MikeAircraft-Engine-v2"
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const text = await response.text();
+
+        let data;
+
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error("Source returned non-JSON data");
+        }
+
+        if (!Array.isArray(data.ac)) {
+          throw new Error("No aircraft array");
+        }
+
+        rawAircraft = data.ac;
+        sourceUsed = source.name;
+        break;
+
+      } catch (error) {
+        sourceErrors.push({
+          source: source.name,
+          error: error.message
+        });
+      }
     }
 
-    const data = await response.json();
+    if (!rawAircraft) {
+      return res.status(502).json({
+        ok: false,
+        engine: "MikeAircraft Engine v2",
+        version: "0.2",
+        stage: "LIVE_INGESTION",
+        error: "All ADS-B sources failed",
+        sourceErrors
+      });
+    }
 
-    const rawAircraft =
-      Array.isArray(data.ac) ? data.ac : [];
+    // =====================================================
+    // STANDARDISE AIRCRAFT DATA
+    // =====================================================
 
-    // Create a clean standard aircraft object.
-    // Future engine stages will work with THIS format,
-    // rather than depending directly on ADS-B field names.
     const aircraft = rawAircraft
-      .filter(ac =>
-        Number.isFinite(Number(ac.lat)) &&
-        Number.isFinite(Number(ac.lon))
-      )
-      .map(ac => ({
-        id:
+      .filter(ac => {
+        return (
+          Number.isFinite(Number(ac.lat)) &&
+          Number.isFinite(Number(ac.lon))
+        );
+      })
+      .map(ac => {
+        const id =
           ac.hex ||
           ac.r ||
-          (ac.flight || "").trim() ||
-          null,
+          String(ac.flight || "").trim() ||
+          null;
 
-        hex: ac.hex || null,
-
-        callsign:
-          (ac.flight || "").trim() || null,
-
-        registration:
-          ac.r || null,
-
-        type:
-          ac.t || null,
-
-        category:
-          ac.category || null,
-
-        lat:
-          Number(ac.lat),
-
-        lon:
-          Number(ac.lon),
-
-        altitude:
-          ac.alt_baro === "ground"
-            ? 0
-            : Number.isFinite(Number(ac.alt_baro))
-              ? Number(ac.alt_baro)
-              : Number.isFinite(Number(ac.alt_geom))
-                ? Number(ac.alt_geom)
-                : null,
-
-        onGround:
+        const onGround =
           ac.alt_baro === "ground" ||
-          ac.alt_geom === "ground",
+          ac.alt_geom === "ground";
 
-        speed:
-          Number.isFinite(Number(ac.gs))
-            ? Number(ac.gs)
-            : null,
+        let alt = null;
 
-        track:
-          Number.isFinite(Number(ac.track))
-            ? Number(ac.track)
-            : null,
+        if (onGround) {
+          alt = 0;
+        } else if (Number.isFinite(Number(ac.alt_baro))) {
+          alt = Number(ac.alt_baro);
+        } else if (Number.isFinite(Number(ac.alt_geom))) {
+          alt = Number(ac.alt_geom);
+        }
 
-        verticalRate:
-          Number.isFinite(Number(ac.baro_rate))
-            ? Number(ac.baro_rate)
-            : Number.isFinite(Number(ac.geom_rate))
-              ? Number(ac.geom_rate)
+        let verticalRate = null;
+
+        if (Number.isFinite(Number(ac.baro_rate))) {
+          verticalRate = Number(ac.baro_rate);
+        } else if (Number.isFinite(Number(ac.geom_rate))) {
+          verticalRate = Number(ac.geom_rate);
+        }
+
+        return {
+          id,
+
+          hex:
+            ac.hex || null,
+
+          callsign:
+            String(ac.flight || "").trim() || null,
+
+          registration:
+            ac.r || null,
+
+          type:
+            ac.t || null,
+
+          category:
+            ac.category || null,
+
+          lat:
+            Number(ac.lat),
+
+          lon:
+            Number(ac.lon),
+
+          altitude:
+            alt,
+
+          onGround,
+
+          speed:
+            Number.isFinite(Number(ac.gs))
+              ? Number(ac.gs)
               : null,
 
-        positionAge:
-          Number.isFinite(Number(ac.seen_pos))
-            ? Number(ac.seen_pos)
-            : null
-      }))
+          track:
+            Number.isFinite(Number(ac.track))
+              ? Number(ac.track)
+              : null,
+
+          verticalRate,
+
+          positionAge:
+            Number.isFinite(Number(ac.seen_pos))
+              ? Number(ac.seen_pos)
+              : null
+        };
+      })
       .filter(ac => ac.id);
+
+    // =====================================================
+    // RESPONSE
+    // =====================================================
 
     return res.status(200).json({
       ok: true,
 
-      engine: "MikeAircraft Engine v2",
+      engine:
+        "MikeAircraft Engine v2",
 
-      version: "0.2",
+      version:
+        "0.2",
 
-      stage: "LIVE_INGESTION",
+      stage:
+        "LIVE_INGESTION",
 
       timestamp:
         new Date().toISOString(),
 
       airport: {
-        code: requestedAirport,
+        code: airportCode,
         icao: airport.icao,
         name: airport.name,
         lat: airport.lat,
@@ -181,16 +276,16 @@ module.exports = async function handler(req, res) {
 
       traffic: {
         rawCount: rawAircraft.length,
-        trackedCount: aircraft.length
+        trackedCount: aircraft.length,
+        source: sourceUsed
       },
 
       aircraft
     });
 
   } catch (error) {
-
     console.error(
-      "MikeAircraft Engine error:",
+      "MikeAircraft Engine v2 error:",
       error
     );
 
@@ -201,4 +296,4 @@ module.exports = async function handler(req, res) {
       error: error.message
     });
   }
-}
+};
