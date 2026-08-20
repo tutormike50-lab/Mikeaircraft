@@ -66,7 +66,7 @@ module.exports = async function handler(req, res) {
 
     // Use the existing MikeAircraft nearby endpoint.
     // This keeps ADS-B access in one place.
-    const nearbyURL =
+    
   const nearbyURL =
   "https://mikeaircraft-azji1qie4-mikeplanes.vercel.app/api/nearby" + 
   `?lat=${airport.lat}` +
