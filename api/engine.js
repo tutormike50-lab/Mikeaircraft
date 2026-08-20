@@ -85,13 +85,17 @@ module.exports = async function handler(req, res) {
 
     // =====================================================
     // UPSTASH REDIS CONNECTION
+    //
+    // IMPORTANT:
+    // These are the exact environment variable names
+    // currently connected to mikeaircraft-9xe3.
     // =====================================================
 
     const redisURL =
-      process.env.MIKEAIRCRAFT_KV_REST_API_URL;
+      process.env.KV_REST_API_URL;
 
     const redisToken =
-      process.env.MIKEAIRCRAFT_KV_REST_API_TOKEN;
+      process.env.KV_REST_API_TOKEN;
 
     const redisAvailable =
       Boolean(redisURL && redisToken);
@@ -99,7 +103,7 @@ module.exports = async function handler(req, res) {
     async function redisCommand(command) {
       if (!redisAvailable) {
         throw new Error(
-          "MikeAircraft Redis environment variables unavailable"
+          "Redis environment variables unavailable"
         );
       }
 
@@ -261,7 +265,6 @@ module.exports = async function handler(req, res) {
 
     const aircraft =
       rawAircraft
-
         .filter(ac =>
           Number.isFinite(Number(ac.lat)) &&
           Number.isFinite(Number(ac.lon))
@@ -449,7 +452,7 @@ module.exports = async function handler(req, res) {
 
         // =================================================
         // WRITE CURRENT SNAPSHOT
-        // Keep temporary airport memory for 10 minutes.
+        // Keep temporary memory for 10 minutes.
         // =================================================
 
         await redisCommand([
@@ -539,7 +542,6 @@ module.exports = async function handler(req, res) {
         previous.onGround !==
         ac.onGround;
 
-      // Only show a few samples in the diagnostic JSON.
       if (movementSamples.length < 10) {
         movementSamples.push({
           id:
