@@ -7,7 +7,6 @@ module.exports = async function handler(req, res) {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-
   <meta
     name="viewport"
     content="width=device-width, initial-scale=1.0"
@@ -35,10 +34,7 @@ module.exports = async function handler(req, res) {
           #00558f,
           #071d34
         );
-
-      border-bottom:
-        1px solid #298dcc;
-
+      border-bottom: 1px solid #298dcc;
       padding: 22px 30px;
     }
 
@@ -53,7 +49,7 @@ module.exports = async function handler(req, res) {
     }
 
     .container {
-      max-width: 980px;
+      max-width: 1100px;
       margin: auto;
       padding: 28px;
     }
@@ -83,6 +79,7 @@ module.exports = async function handler(req, res) {
       justify-content: space-between;
       padding: 10px 18px;
       border-bottom: 1px solid #273240;
+      gap: 20px;
     }
 
     .row:last-child {
@@ -95,6 +92,7 @@ module.exports = async function handler(req, res) {
 
     .value {
       font-weight: bold;
+      text-align: right;
     }
 
     .good {
@@ -138,6 +136,64 @@ module.exports = async function handler(req, res) {
       margin-bottom: 20px;
     }
 
+    .trafficGrid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 22px;
+    }
+
+    .targetBox {
+      padding: 18px;
+    }
+
+    .targetName {
+      font-size: 28px;
+      font-weight: bold;
+      margin-bottom: 7px;
+    }
+
+    .targetState {
+      font-size: 16px;
+      font-weight: bold;
+      margin-bottom: 15px;
+    }
+
+    .targetDetail {
+      display: flex;
+      justify-content: space-between;
+      border-top: 1px solid #273240;
+      padding: 9px 0;
+      font-size: 14px;
+      gap: 20px;
+    }
+
+    .targetDetail span:first-child {
+      color: #9fb0c2;
+    }
+
+    .arrival {
+      color: #54d7ff;
+    }
+
+    .departure {
+      color: #ffbd5b;
+    }
+
+    .stateList {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 18px;
+    }
+
+    .statePill {
+      background: #0e2638;
+      border: 1px solid #285779;
+      border-radius: 20px;
+      padding: 7px 12px;
+      font-size: 13px;
+    }
+
     .footer {
       color: #74879a;
       font-size: 12px;
@@ -154,6 +210,12 @@ module.exports = async function handler(req, res) {
       margin-right: 7px;
       box-shadow: 0 0 8px #57dc91;
     }
+
+    @media (max-width: 800px) {
+      .trafficGrid {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 
@@ -162,7 +224,7 @@ module.exports = async function handler(req, res) {
   <div class="header">
     <h1>✈ MikeAircraft Engine Monitor</h1>
     <p>
-      Engine v2 development dashboard
+      Engine v2 • State Tracking Dashboard
     </p>
   </div>
 
@@ -199,7 +261,21 @@ module.exports = async function handler(req, res) {
       </div>
 
       <div class="row">
-        <span class="label">ADS-B Source</span>
+        <span class="label">Engine version</span>
+        <span id="version" class="value">
+          ---
+        </span>
+      </div>
+
+      <div class="row">
+        <span class="label">ADS-B status</span>
+        <span id="dataStatus" class="value">
+          ---
+        </span>
+      </div>
+
+      <div class="row">
+        <span class="label">ADS-B source</span>
         <span id="source" class="value">
           ---
         </span>
@@ -222,7 +298,7 @@ module.exports = async function handler(req, res) {
 
       <div class="row">
         <span class="label">
-          Aircraft received
+          Aircraft currently tracked
         </span>
 
         <span
@@ -235,27 +311,14 @@ module.exports = async function handler(req, res) {
 
       <div class="row">
         <span class="label">
-          Aircraft matched to previous snapshot
+          Persistent aircraft histories
         </span>
 
         <span
-          id="matched"
+          id="histories"
           class="value big"
         >
           0
-        </span>
-      </div>
-
-      <div class="row">
-        <span class="label">
-          Previous snapshot age
-        </span>
-
-        <span
-          id="age"
-          class="value"
-        >
-          ---
         </span>
       </div>
 
@@ -287,33 +350,159 @@ module.exports = async function handler(req, res) {
     <div class="card">
 
       <div class="cardTitle">
+        AIRCRAFT STATES
+      </div>
+
+      <div
+        id="stateList"
+        class="stateList"
+      >
+        <span class="statePill">
+          Waiting for state data...
+        </span>
+      </div>
+
+    </div>
+
+    <div class="trafficGrid">
+
+      <div class="card">
+
+        <div class="cardTitle">
+          NEXT ARRIVAL
+        </div>
+
+        <div
+          id="arrivalBox"
+          class="targetBox"
+        >
+
+          <div
+            class="targetName arrival"
+            id="arrivalName"
+          >
+            NONE
+          </div>
+
+          <div
+            class="targetState arrival"
+            id="arrivalState"
+          >
+            Waiting...
+          </div>
+
+          <div class="targetDetail">
+            <span>Registration</span>
+            <strong id="arrivalReg">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Aircraft type</span>
+            <strong id="arrivalType">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Runway</span>
+            <strong id="arrivalRunway">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Airport distance</span>
+            <strong id="arrivalDistance">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Threshold distance</span>
+            <strong id="arrivalThreshold">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Altitude</span>
+            <strong id="arrivalAltitude">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Speed</span>
+            <strong id="arrivalSpeed">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Confidence</span>
+            <strong id="arrivalConfidence">---</strong>
+          </div>
+
+      </div>
+    </div>
+
+      <div class="card">
+
+        <div class="cardTitle">
+          NEXT DEPARTURE
+        </div>
+
+        <div
+          id="departureBox"
+          class="targetBox"
+        >
+
+          <div
+            class="targetName departure"
+            id="departureName"
+          >
+            NONE
+          </div>
+
+          <div
+            class="targetState departure"
+            id="departureState"
+          >
+            Waiting...
+          </div>
+
+          <div class="targetDetail">
+            <span>Registration</span>
+            <strong id="departureReg">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Aircraft type</span>
+            <strong id="departureType">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Runway</span>
+            <strong id="departureRunway">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Airport distance</span>
+            <strong id="departureDistance">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Altitude</span>
+            <strong id="departureAltitude">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Speed</span>
+            <strong id="departureSpeed">---</strong>
+          </div>
+
+          <div class="targetDetail">
+            <span>Confidence</span>
+            <strong id="departureConfidence">---</strong>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+
+    <div class="card">
+
+      <div class="cardTitle">
         MEMORY HEALTH
-      </div>
-
-      <div class="row">
-        <span class="label">
-          Previous snapshot found
-        </span>
-
-        <span
-          id="snapshot"
-          class="value"
-        >
-          ---
-        </span>
-      </div>
-
-      <div class="row">
-        <span class="label">
-          Previous aircraft count
-        </span>
-
-        <span
-          id="previousCount"
-          class="value"
-        >
-          0
-        </span>
       </div>
 
       <div class="row">
@@ -342,6 +531,19 @@ module.exports = async function handler(req, res) {
         </span>
       </div>
 
+      <div class="row">
+        <span class="label">
+          Memory error
+        </span>
+
+        <span
+          id="memoryError"
+          class="value"
+        >
+          NONE
+        </span>
+      </div>
+
     </div>
 
     <div class="footer">
@@ -351,15 +553,23 @@ module.exports = async function handler(req, res) {
   </div>
 
 <script>
+
   const UPDATE_INTERVAL = 5000;
 
   let busy = false;
 
-  function setStatus(id, text, good) {
+  function text(id, value) {
+    document.getElementById(id).textContent =
+      value;
+  }
+
+  function setStatus(id, value, good) {
+
     const element =
       document.getElementById(id);
 
-    element.textContent = text;
+    element.textContent =
+      value;
 
     element.className =
       "value " +
@@ -372,6 +582,168 @@ module.exports = async function handler(req, res) {
       );
   }
 
+  function showTarget(prefix, target) {
+
+    if (!target) {
+
+      text(prefix + "Name", "NONE");
+      text(prefix + "State", "No candidate");
+      text(prefix + "Reg", "---");
+      text(prefix + "Type", "---");
+      text(prefix + "Runway", "---");
+      text(prefix + "Distance", "---");
+
+      if (
+        document.getElementById(
+          prefix + "Threshold"
+        )
+      ) {
+        text(
+          prefix + "Threshold",
+          "---"
+        );
+      }
+
+      text(prefix + "Altitude", "---");
+      text(prefix + "Speed", "---");
+      text(prefix + "Confidence", "---");
+
+      return;
+    }
+
+    text(
+      prefix + "Name",
+      target.callsign ||
+      target.registration ||
+      target.id ||
+      "UNKNOWN"
+    );
+
+    text(
+      prefix + "State",
+      target.state || "UNKNOWN"
+    );
+
+    text(
+      prefix + "Reg",
+      target.registration || "---"
+    );
+
+    text(
+      prefix + "Type",
+      target.type || "---"
+    );
+
+    text(
+      prefix + "Runway",
+      target.runway || "---"
+    );
+
+    text(
+      prefix + "Distance",
+      target.distanceKm != null
+        ? target.distanceKm + " km"
+        : "---"
+    );
+
+    if (
+      document.getElementById(
+        prefix + "Threshold"
+      )
+    ) {
+
+      text(
+        prefix + "Threshold",
+        target.thresholdKm != null
+          ? target.thresholdKm + " km"
+          : "---"
+      );
+    }
+
+    text(
+      prefix + "Altitude",
+      target.altitude != null
+        ? target.altitude + " ft"
+        : "---"
+    );
+
+    text(
+      prefix + "Speed",
+      target.speed != null
+        ? target.speed + " kt"
+        : "---"
+    );
+
+    text(
+      prefix + "Confidence",
+      target.confidence != null
+        ? target.confidence + "%"
+        : "---"
+    );
+  }
+
+  function showStates(stateCounts) {
+
+    const container =
+      document.getElementById(
+        "stateList"
+      );
+
+    container.innerHTML = "";
+
+    const entries =
+      Object.entries(
+        stateCounts || {}
+      );
+
+    if (!entries.length) {
+
+      const pill =
+        document.createElement(
+          "span"
+        );
+
+      pill.className =
+        "statePill";
+
+      pill.textContent =
+        "No state data yet";
+
+      container.appendChild(
+        pill
+      );
+
+      return;
+    }
+
+    entries
+      .sort(
+        (a, b) =>
+          b[1] - a[1]
+      )
+      .forEach(
+        ([state, count]) => {
+
+          const pill =
+            document.createElement(
+              "span"
+            );
+
+          pill.className =
+            "statePill";
+
+          pill.textContent =
+            state +
+            ": " +
+            count;
+
+          container.appendChild(
+            pill
+          );
+        }
+      );
+  }
+
   async function updateMonitor() {
 
     if (busy) {
@@ -381,37 +753,54 @@ module.exports = async function handler(req, res) {
     busy = true;
 
     const airport =
-      document.getElementById("airport").value;
+      document
+        .getElementById(
+          "airport"
+        )
+        .value;
 
     try {
 
       const response =
         await fetch(
           "/api/engine?airport=" +
-          encodeURIComponent(airport) +
+          encodeURIComponent(
+            airport
+          )
+          +
           "&t=" +
           Date.now(),
+
           {
-            cache: "no-store"
+            cache:
+              "no-store"
           }
         );
 
-      const text =
+      const raw =
         await response.text();
 
       let data;
 
       try {
+
         data =
-          JSON.parse(text);
+          JSON.parse(raw);
+
       }
       catch {
+
         throw new Error(
           "Engine returned non-JSON data"
         );
       }
 
-      if (!response.ok || !data.ok) {
+      if (
+        !response.ok
+        ||
+        !data.ok
+      ) {
+
         throw new Error(
           data.error ||
           "Engine request failed"
@@ -424,6 +813,9 @@ module.exports = async function handler(req, res) {
       const memory =
         data.memory || {};
 
+      const intelligence =
+        data.intelligence || {};
+
       document.getElementById(
         "engine"
       ).innerHTML =
@@ -434,47 +826,27 @@ module.exports = async function handler(req, res) {
       ).className =
         "value good";
 
-      document.getElementById(
-        "source"
-      ).textContent =
-        traffic.source || "Unknown";
+      text(
+        "version",
+        data.version || "---"
+      );
 
-      document.getElementById(
-        "aircraft"
-      ).textContent =
-        traffic.trackedCount ??
-        traffic.rawCount ??
-        0;
+      const dataStatus =
+        data.dataStatus || "LIVE";
 
-      document.getElementById(
-        "matched"
-      ).textContent =
-        memory.matchedAircraft ?? 0;
+      setStatus(
+        "dataStatus",
+        dataStatus,
+        dataStatus === "LIVE"
+          ? true
+          : null
+      );
 
-      document.getElementById(
-        "previousCount"
-      ).textContent =
-        memory.previousAircraftCount ?? 0;
-
-      if (
-        memory.previousAgeSeconds !== null &&
-        memory.previousAgeSeconds !== undefined
-      ) {
-
-        document.getElementById(
-          "age"
-        ).textContent =
-          memory.previousAgeSeconds +
-          " seconds";
-
-      }
-      else {
-
-        document.getElementById(
-          "age"
-        ).textContent =
-          "Waiting for history";
-      }
+      text(
+        "source",
+        traffic.source ||
+        "Unknown"
+      );
 
       setStatus(
         "redis",
@@ -482,6 +854,19 @@ module.exports = async function handler(req, res) {
           ? "CONNECTED"
           : "NOT CONNECTED",
         memory.redisConnected
+      );
+
+      text(
+        "aircraft",
+        traffic.trackedCount ??
+        traffic.rawCount ??
+        0
+      );
+
+      text(
+        "histories",
+        memory.trackedHistories ??
+        0
       );
 
       setStatus(
@@ -500,27 +885,64 @@ module.exports = async function handler(req, res) {
         memory.writeOK
       );
 
-      setStatus(
-        "snapshot",
-        memory.previousSnapshotFound
-          ? "YES"
-          : "NOT YET",
-        memory.previousSnapshotFound
-          ? true
-          : null
+      if (memory.error) {
+
+        text(
+          "memoryError",
+          memory.error
+        );
+
+        document
+          .getElementById(
+            "memoryError"
+          )
+          .className =
+            "value bad";
+
+      }
+      else {
+
+        text(
+          "memoryError",
+          "NONE"
+        );
+
+        document
+          .getElementById(
+            "memoryError"
+          )
+          .className =
+            "value good";
+      }
+
+      showStates(
+        intelligence.stateCounts
       );
 
-      document.getElementById(
-        "lastUpdate"
-      ).textContent =
-        new Date().toLocaleTimeString();
+      showTarget(
+        "arrival",
+        intelligence.nextArrival
+      );
 
-      document.getElementById(
-        "errorBox"
-      ).style.display =
-        "none";
+      showTarget(
+        "departure",
+        intelligence.nextDeparture
+      );
 
+      text(
+        "lastUpdate",
+        new Date()
+          .toLocaleTimeString()
+      );
+
+      document
+        .getElementById(
+          "errorBox"
+        )
+        .style.display =
+          "none";
     }
+
     catch (error) {
 
       setStatus(
@@ -541,17 +963,20 @@ module.exports = async function handler(req, res) {
       box.style.display =
         "block";
     }
+
     finally {
       busy = false;
     }
   }
 
-  document.getElementById(
-    "airport"
-  ).addEventListener(
-    "change",
-    updateMonitor
-  );
+  document
+    .getElementById(
+      "airport"
+    )
+    .addEventListener(
+      "change",
+      updateMonitor
+    );
 
   updateMonitor();
 
@@ -559,11 +984,14 @@ module.exports = async function handler(req, res) {
     updateMonitor,
     UPDATE_INTERVAL
   );
+
 </script>
 
 </body>
 </html>
 `;
 
-  return res.status(200).send(html);
+  return res
+    .status(200)
+    .send(html);
 };
