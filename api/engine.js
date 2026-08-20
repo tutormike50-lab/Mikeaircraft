@@ -9,30 +9,13 @@ module.exports = async function handler(req, res) {
   }
 
   if (req.method !== "GET") {
-    return res.status(405).json({
-      ok: false,
-      error: "Method not allowed"
-    });
+    return res.status(405).json({ ok: false, error: "Method not allowed" });
   }
 
   try {
-
-    // =====================================================
-    // MIKEAIRCRAFT ENGINE v2
-    // Version 0.4.1
-    //
-    // Stage 3.1:
-    // Persistent state tracking + bad-target filtering
-    // =====================================================
-
     const AIRPORTS = {
-
       PRG: {
-        name: "Prague Airport",
-        icao: "LKPR",
-        lat: 50.1008,
-        lon: 14.2600,
-
+        name: "Prague Airport", icao: "LKPR", lat: 50.1008, lon: 14.2600,
         runwayEnds: [
           { name: "06", heading: 65, lat: 50.1017990, lon: 14.2263002 },
           { name: "24", heading: 245, lat: 50.1160011, lon: 14.2734003 },
@@ -42,11 +25,7 @@ module.exports = async function handler(req, res) {
       },
 
       LHR: {
-        name: "London Heathrow",
-        icao: "EGLL",
-        lat: 51.471227,
-        lon: -0.460881,
-
+        name: "London Heathrow", icao: "EGLL", lat: 51.471227, lon: -0.460881,
         runwayEnds: [
           { name: "09L", heading: 90, lat: 51.477490, lon: -0.489439 },
           { name: "27R", heading: 270, lat: 51.477681, lon: -0.433227 },
@@ -56,11 +35,7 @@ module.exports = async function handler(req, res) {
       },
 
       FRA: {
-        name: "Frankfurt Airport",
-        icao: "EDDF",
-        lat: 50.032606,
-        lon: 8.540669,
-
+        name: "Frankfurt Airport", icao: "EDDF", lat: 50.032606, lon: 8.540669,
         runwayEnds: [
           { name: "07C", heading: 70, lat: 50.0326004, lon: 8.5346298 },
           { name: "25C", heading: 250, lat: 50.0451012, lon: 8.5869799 },
@@ -74,11 +49,7 @@ module.exports = async function handler(req, res) {
       },
 
       AMS: {
-        name: "Amsterdam Schiphol",
-        icao: "EHAM",
-        lat: 52.314875,
-        lon: 4.758074,
-
+        name: "Amsterdam Schiphol", icao: "EHAM", lat: 52.314875, lon: 4.758074,
         runwayEnds: [
           { name: "04", heading: 41, lat: 52.3003998, lon: 4.7834802 },
           { name: "22", heading: 221, lat: 52.3139992, lon: 4.8030200 },
@@ -96,11 +67,7 @@ module.exports = async function handler(req, res) {
       },
 
       CDG: {
-        name: "Paris Charles de Gaulle",
-        icao: "LFPG",
-        lat: 49.009750,
-        lon: 2.562618,
-
+        name: "Paris Charles de Gaulle", icao: "LFPG", lat: 49.009750, lon: 2.562618,
         runwayEnds: [
           { name: "08L", heading: 85, lat: 48.9957008, lon: 2.5527401 },
           { name: "26R", heading: 265, lat: 48.9987984, lon: 2.6101799 },
@@ -114,11 +81,7 @@ module.exports = async function handler(req, res) {
       },
 
       MAN: {
-        name: "Manchester Airport",
-        icao: "EGCC",
-        lat: 53.347150,
-        lon: -2.283883,
-
+        name: "Manchester Airport", icao: "EGCC", lat: 53.347150, lon: -2.283883,
         runwayEnds: [
           { name: "05L", heading: 51, lat: 53.3451004, lon: -2.2927401 },
           { name: "23R", heading: 231, lat: 53.3624001, lon: -2.2571399 },
@@ -128,168 +91,73 @@ module.exports = async function handler(req, res) {
       }
     };
 
-    // =====================================================
-    // AIRPORT
-    // =====================================================
-
-    const requestedCode =
-      String(req.query.airport || "PRG").toUpperCase();
-
-    const airportCode =
-      AIRPORTS[requestedCode]
-        ? requestedCode
-        : "PRG";
-
-    const airport =
-      AIRPORTS[airportCode];
-
+    const requestedCode = String(req.query.airport || "PRG").toUpperCase();
+    const airportCode = AIRPORTS[requestedCode] ? requestedCode : "PRG";
+    const airport = AIRPORTS[airportCode];
     const radius = 20;
+    const now = Date.now();
 
-    const now =
-      Date.now();
-
-    // =====================================================
-    // REDIS
-    // =====================================================
-
-    const redisURL =
-      process.env.KV_REST_API_URL;
-
-    const redisToken =
-      process.env.KV_REST_API_TOKEN;
-
-    const redisAvailable =
-      Boolean(redisURL && redisToken);
+    const redisURL = process.env.KV_REST_API_URL;
+    const redisToken = process.env.KV_REST_API_TOKEN;
+    const redisAvailable = Boolean(redisURL && redisToken);
 
     async function redisCommand(command) {
+      if (!redisAvailable) throw new Error("Redis environment variables unavailable");
 
-      if (!redisAvailable) {
-        throw new Error(
-          "Redis environment variables unavailable"
-        );
-      }
+      const response = await fetch(redisURL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${redisToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(command)
+      });
 
-      const response =
-        await fetch(redisURL, {
-          method: "POST",
+      if (!response.ok) throw new Error(`Redis HTTP ${response.status}`);
 
-          headers: {
-            Authorization:
-              `Bearer ${redisToken}`,
+      const result = await response.json();
 
-            "Content-Type":
-              "application/json"
-          },
-
-          body:
-            JSON.stringify(command)
-        });
-
-      if (!response.ok) {
-        throw new Error(
-          `Redis HTTP ${response.status}`
-        );
-      }
-
-      const result =
-        await response.json();
-
-      if (result.error) {
-        throw new Error(
-          `Redis error: ${result.error}`
-        );
-      }
+      if (result.error) throw new Error(`Redis error: ${result.error}`);
 
       return result.result;
     }
 
-    // =====================================================
-    // FILTER BAD / NON-AIRCRAFT TARGETS
-    // =====================================================
+    const rejectedCategories = new Set([
+      "A7","B1","B2","B3","B4","B6","B7","C1","C2","C3","C4","C5"
+    ]);
 
-    const rejectedCategories =
-      new Set([
-        "A7",
-        "B1",
-        "B2",
-        "B3",
-        "B4",
-        "B6",
-        "B7",
-        "C1",
-        "C2",
-        "C3",
-        "C4",
-        "C5"
-      ]);
-
-    const rejectedExact =
-      new Set([
-        "GND",
-        "TWR",
-        "EMER",
-        "GROUND",
-        "TOWER"
-      ]);
+    const rejectedExact = new Set([
+      "GND","TWR","EMER","GROUND","TOWER"
+    ]);
 
     const rejectedPrefixes = [
-      "FOLLOW",
-      "POZAR",
-      "TXLU",
-      "UDRZBA",
-      "AIRPORT",
-      "GROUND",
-      "TWR",
-      "GND",
-      "EMER"
+      "FOLLOW","POZAR","TXLU","UDRZBA","AIRPORT","GROUND","TWR","GND","EMER"
     ];
 
     function cleanText(value) {
-      return String(value || "")
-        .trim()
-        .toUpperCase();
+      return String(value || "").trim().toUpperCase();
     }
 
     function unwantedAircraft(ac) {
+      const flight = cleanText(ac.flight);
+      const type = cleanText(ac.t);
+      const registration = cleanText(ac.r);
+      const category = cleanText(ac.category);
 
-      const flight =
-        cleanText(ac.flight);
-
-      const type =
-        cleanText(ac.t);
-
-      const registration =
-        cleanText(ac.r);
-
-      const category =
-        cleanText(ac.category);
+      if (rejectedCategories.has(category)) return true;
 
       if (
-        rejectedCategories.has(category)
-      ) {
-        return true;
-      }
-
-      if (
-        rejectedExact.has(type)
-        ||
-        rejectedExact.has(registration)
-        ||
+        rejectedExact.has(type) ||
+        rejectedExact.has(registration) ||
         rejectedExact.has(flight)
       ) {
         return true;
       }
 
-      for (
-        const prefix
-        of rejectedPrefixes
-      ) {
-
+      for (const prefix of rejectedPrefixes) {
         if (
-          flight.startsWith(prefix)
-          ||
-          registration.startsWith(prefix)
-          ||
+          flight.startsWith(prefix) ||
+          registration.startsWith(prefix) ||
           type.startsWith(prefix)
         ) {
           return true;
@@ -299,78 +167,31 @@ module.exports = async function handler(req, res) {
       return false;
     }
 
-    // =====================================================
-    // GEOMETRY
-    // =====================================================
-
-    function distanceKm(
-      lat1,
-      lon1,
-      lat2,
-      lon2
-    ) {
-
+    function distanceKm(lat1, lon1, lat2, lon2) {
       const R = 6371;
-
-      const dLat =
-        (lat2 - lat1) *
-        Math.PI / 180;
-
-      const dLon =
-        (lon2 - lon1) *
-        Math.PI / 180;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
 
       const a =
-        Math.sin(dLat / 2) ** 2
-        +
-        Math.cos(lat1 * Math.PI / 180)
-        *
-        Math.cos(lat2 * Math.PI / 180)
-        *
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(lat1 * Math.PI / 180) *
+        Math.cos(lat2 * Math.PI / 180) *
         Math.sin(dLon / 2) ** 2;
 
-      return (
-        R *
-        2 *
-        Math.atan2(
-          Math.sqrt(a),
-          Math.sqrt(1 - a)
-        )
-      );
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
 
     function headingDiff(a, b) {
-
-      if (
-        !Number.isFinite(a)
-        ||
-        !Number.isFinite(b)
-      ) {
-        return 180;
-      }
-
-      return Math.abs(
-        ((a - b + 540) % 360) - 180
-      );
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return 180;
+      return Math.abs(((a - b + 540) % 360) - 180);
     }
 
     function nearestThreshold(ac) {
-
       let best = null;
       let bestDistance = Infinity;
 
-      for (
-        const end
-        of airport.runwayEnds
-      ) {
-
-        const d =
-          distanceKm(
-            ac.lat,
-            ac.lon,
-            end.lat,
-            end.lon
-          );
+      for (const end of airport.runwayEnds) {
+        const d = distanceKm(ac.lat, ac.lon, end.lat, end.lon);
 
         if (d < bestDistance) {
           bestDistance = d;
@@ -385,143 +206,64 @@ module.exports = async function handler(req, res) {
     }
 
     function distanceToRunwayLine(ac) {
-
       let best = Infinity;
 
-      for (
-        let i = 0;
-        i < airport.runwayEnds.length;
-        i += 2
-      ) {
+      for (let i = 0; i < airport.runwayEnds.length; i += 2) {
+        const a = airport.runwayEnds[i];
+        const b = airport.runwayEnds[i + 1];
 
-        const a =
-          airport.runwayEnds[i];
+        if (!a || !b) continue;
 
-        const b =
-          airport.runwayEnds[i + 1];
+        const ref = (ac.lat + a.lat + b.lat) / 3;
+        const ky = 111.32;
+        const kx = 111.32 * Math.cos(ref * Math.PI / 180);
 
-        if (!a || !b) {
-          continue;
-        }
+        const px = ac.lon * kx;
+        const py = ac.lat * ky;
 
-        const ref =
-          (
-            ac.lat +
-            a.lat +
-            b.lat
-          ) / 3;
+        const ax = a.lon * kx;
+        const ay = a.lat * ky;
 
-        const ky =
-          111.32;
+        const bx = b.lon * kx;
+        const by = b.lat * ky;
 
-        const kx =
-          111.32 *
-          Math.cos(
-            ref * Math.PI / 180
-          );
+        const vx = bx - ax;
+        const vy = by - ay;
 
-        const px =
-          ac.lon * kx;
+        const wx = px - ax;
+        const wy = py - ay;
 
-        const py =
-          ac.lat * ky;
+        const len2 = vx * vx + vy * vy || 1;
 
-        const ax =
-          a.lon * kx;
+        let t = (wx * vx + wy * vy) / len2;
+        t = Math.max(0, Math.min(1, t));
 
-        const ay =
-          a.lat * ky;
+        const cx = ax + t * vx;
+        const cy = ay + t * vy;
 
-        const bx =
-          b.lon * kx;
+        const d = Math.sqrt(
+          (px - cx) ** 2 +
+          (py - cy) ** 2
+        );
 
-        const by =
-          b.lat * ky;
-
-        const vx =
-          bx - ax;
-
-        const vy =
-          by - ay;
-
-        const wx =
-          px - ax;
-
-        const wy =
-          py - ay;
-
-        const len2 =
-          vx * vx +
-          vy * vy ||
-          1;
-
-        let t =
-          (
-            wx * vx +
-            wy * vy
-          )
-          /
-          len2;
-
-        t =
-          Math.max(
-            0,
-            Math.min(
-              1,
-              t
-            )
-          );
-
-        const cx =
-          ax +
-          t * vx;
-
-        const cy =
-          ay +
-          t * vy;
-
-        const d =
-          Math.sqrt(
-            (px - cx) ** 2 +
-            (py - cy) ** 2
-          );
-
-        if (d < best) {
-          best = d;
-        }
+        if (d < best) best = d;
       }
 
       return best;
     }
 
-    // =====================================================
-    // ADS-B SOURCES
-    // =====================================================
-
     const sources = [
-
       {
         name: "adsb.lol",
-
-        url:
-          `https://api.adsb.lol/v2/point/` +
-          `${airport.lat}/${airport.lon}/${radius}`
+        url: `https://api.adsb.lol/v2/point/${airport.lat}/${airport.lon}/${radius}`
       },
-
       {
         name: "airplanes.live",
-
-        url:
-          `https://api.airplanes.live/v2/point/` +
-          `${airport.lat}/${airport.lon}/${radius}`
+        url: `https://api.airplanes.live/v2/point/${airport.lat}/${airport.lon}/${radius}`
       },
-
       {
         name: "adsb.fi",
-
-        url:
-          `https://opendata.adsb.fi/api/v2/lat/` +
-          `${airport.lat}/lon/${airport.lon}/dist/${radius}`
+        url: `https://opendata.adsb.fi/api/v2/lat/${airport.lat}/lon/${airport.lon}/dist/${radius}`
       }
     ];
 
@@ -530,37 +272,21 @@ module.exports = async function handler(req, res) {
 
     const sourceErrors = [];
 
-    for (
-      const source
-      of sources
-    ) {
-
+    for (const source of sources) {
       try {
-
-        const response =
-          await fetch(
-            source.url,
-            {
-              cache: "no-store",
-
-              headers: {
-                "User-Agent":
-                  "MikeAircraft-Engine-v2"
-              }
-            }
-          );
+        const response = await fetch(source.url, {
+          cache: "no-store",
+          headers: {
+            "User-Agent": "MikeAircraft-Engine-v2"
+          }
+        });
 
         if (!response.ok) {
-          throw new Error(
-            `HTTP ${response.status}`
-          );
+          throw new Error(`HTTP ${response.status}`);
         }
 
-        const text =
-          await response.text();
-
-        const data =
-          JSON.parse(text);
+        const text = await response.text();
+        const data = JSON.parse(text);
 
         const list =
           Array.isArray(data.ac)
@@ -570,81 +296,54 @@ module.exports = async function handler(req, res) {
               : null;
 
         if (!list) {
-          throw new Error(
-            "No aircraft array returned"
-          );
+          throw new Error("No aircraft array returned");
         }
 
-        rawAircraft =
-          list;
-
-        sourceUsed =
-          source.name;
-
+        rawAircraft = list;
+        sourceUsed = source.name;
         break;
-      }
-      catch (error) {
 
+      } catch (error) {
         sourceErrors.push({
-          source:
-            source.name,
-
-          error:
-            error.message
+          source: source.name,
+          error: error.message
         });
       }
     }
-
-    // =====================================================
-    // LOAD EXISTING STATE
-    // =====================================================
 
     const stateKey =
       `mikeaircraft:v2:${airportCode}:state`;
 
     let savedState = null;
-
     let redisReadOK = false;
     let redisWriteOK = false;
-
     let redisError = null;
 
     if (redisAvailable) {
-
       try {
-
         const stored =
           await redisCommand([
             "GET",
             stateKey
           ]);
 
-        redisReadOK =
-          true;
+        redisReadOK = true;
 
         if (stored) {
           savedState =
             JSON.parse(stored);
         }
-      }
-      catch (error) {
 
+      } catch (error) {
         redisError =
           error.message;
       }
     }
 
-    // =====================================================
-    // STALE FALLBACK
-    // =====================================================
-
     if (!rawAircraft) {
-
       const fallback =
         savedState &&
-        Array.isArray(
-          savedState.lastGoodAircraft
-        )
+        Array.isArray(savedState.lastGoodAircraft)
           ? savedState.lastGoodAircraft
           : null;
 
@@ -652,126 +351,83 @@ module.exports = async function handler(req, res) {
         savedState &&
         savedState.lastGoodTimestamp
           ? Math.round(
-              (
-                now -
-                savedState.lastGoodTimestamp
-              )
-              /
-              1000
+              (now - savedState.lastGoodTimestamp) / 1000
             )
           : null;
 
       if (
-        !fallback
-        ||
-        fallbackAge === null
-        ||
+        !fallback ||
+        fallbackAge === null ||
         fallbackAge > 45
       ) {
-
         return res.status(502).json({
           ok: false,
-
-          engine:
-            "MikeAircraft Engine v2",
-
-          version:
-            "0.4.1",
-
-          stage:
-            "FILTERED_STATE_TRACKING",
-
-          error:
-            "All ADS-B sources failed",
-
+          engine: "MikeAircraft Engine v2",
+          version: "0.5",
+          stage: "CURRENT_NEXT_SELECTION",
+          error: "All ADS-B sources failed",
           sourceErrors,
 
           memory: {
-            redisConnected:
-              redisAvailable,
-
-            readOK:
-              redisReadOK,
-
-            writeOK:
-              false,
-
-            error:
-              redisError
+            redisConnected: redisAvailable,
+            readOK: redisReadOK,
+            writeOK: false,
+            error: redisError
           }
         });
       }
 
       return res.status(200).json({
         ok: true,
-
-        engine:
-          "MikeAircraft Engine v2",
-
-        version:
-          "0.4.1",
-
-        stage:
-          "FILTERED_STATE_TRACKING",
-
-        dataStatus:
-          "STALE",
-
-        staleAgeSeconds:
-          fallbackAge,
-
-        timestamp:
-          new Date(now).toISOString(),
+        engine: "MikeAircraft Engine v2",
+        version: "0.5",
+        stage: "CURRENT_NEXT_SELECTION",
+        dataStatus: "STALE",
+        staleAgeSeconds: fallbackAge,
+        timestamp: new Date(now).toISOString(),
 
         airport: {
-          code:
-            airportCode,
-
-          icao:
-            airport.icao,
-
-          name:
-            airport.name,
-
-          lat:
-            airport.lat,
-
-          lon:
-            airport.lon
+          code: airportCode,
+          icao: airport.icao,
+          name: airport.name,
+          lat: airport.lat,
+          lon: airport.lon
         },
 
         traffic: {
-          trackedCount:
-            fallback.length,
-
-          source:
-            "redis-fallback"
+          trackedCount: fallback.length,
+          source: "redis-fallback"
         },
 
         memory: {
-          redisConnected:
-            redisAvailable,
+          redisConnected: redisAvailable,
+          readOK: redisReadOK,
+          writeOK: false,
 
-          readOK:
-            redisReadOK,
+          trackedHistories:
+            savedState && savedState.tracks
+              ? Object.keys(savedState.tracks).length
+              : 0,
 
-          writeOK:
-            false,
-
-          error:
-            redisError
+          error: redisError
         },
 
-        aircraft:
-          fallback,
+        intelligence:
+          savedState && savedState.lastIntelligence
+            ? savedState.lastIntelligence
+            : {
+                stateCounts: {},
+                current: null,
+                nextIn: null,
+                nextOut: null,
+                nextArrival: null,
+                nextDeparture: null
+              },
 
+        aircraft: fallback,
         sourceErrors
       });
     }
-
-    // =====================================================
-    // FILTER + NORMALISE
-    // =====================================================
 
     const filteredRaw =
       rawAircraft.filter(
@@ -785,53 +441,33 @@ module.exports = async function handler(req, res) {
 
     const aircraft =
       filteredRaw
-
         .filter(
           ac =>
-            Number.isFinite(
-              Number(ac.lat)
-            )
-            &&
-            Number.isFinite(
-              Number(ac.lon)
-            )
+            Number.isFinite(Number(ac.lat)) &&
+            Number.isFinite(Number(ac.lon))
         )
-
         .map(ac => {
-
           const id =
-            ac.hex
-            ||
-            ac.r
-            ||
-            String(
-              ac.flight || ""
-            ).trim()
-            ||
+            ac.hex ||
+            ac.r ||
+            String(ac.flight || "").trim() ||
             null;
 
           const onGround =
-            ac.alt_baro === "ground"
-            ||
+            ac.alt_baro === "ground" ||
             ac.alt_geom === "ground";
 
           let altitude = null;
 
           if (onGround) {
             altitude = 0;
-          }
-          else if (
-            Number.isFinite(
-              Number(ac.alt_baro)
-            )
+          } else if (
+            Number.isFinite(Number(ac.alt_baro))
           ) {
             altitude =
               Number(ac.alt_baro);
-          }
-          else if (
-            Number.isFinite(
-              Number(ac.alt_geom)
-            )
+          } else if (
+            Number.isFinite(Number(ac.alt_geom))
           ) {
             altitude =
               Number(ac.alt_geom);
@@ -840,35 +476,25 @@ module.exports = async function handler(req, res) {
           let verticalRate = null;
 
           if (
-            Number.isFinite(
-              Number(ac.baro_rate)
-            )
+            Number.isFinite(Number(ac.baro_rate))
           ) {
             verticalRate =
               Number(ac.baro_rate);
-          }
-          else if (
-            Number.isFinite(
-              Number(ac.geom_rate)
-            )
+          } else if (
+            Number.isFinite(Number(ac.geom_rate))
           ) {
             verticalRate =
               Number(ac.geom_rate);
           }
 
           const item = {
-
             id,
 
             hex:
               ac.hex || null,
 
             callsign:
-              String(
-                ac.flight || ""
-              ).trim()
-              ||
-              null,
+              String(ac.flight || "").trim() || null,
 
             registration:
               ac.r || null,
@@ -890,25 +516,19 @@ module.exports = async function handler(req, res) {
             onGround,
 
             speed:
-              Number.isFinite(
-                Number(ac.gs)
-              )
+              Number.isFinite(Number(ac.gs))
                 ? Number(ac.gs)
                 : null,
 
             track:
-              Number.isFinite(
-                Number(ac.track)
-              )
+              Number.isFinite(Number(ac.track))
                 ? Number(ac.track)
                 : null,
 
             verticalRate,
 
             positionAge:
-              Number.isFinite(
-                Number(ac.seen_pos)
-              )
+              Number.isFinite(Number(ac.seen_pos))
                 ? Number(ac.seen_pos)
                 : null
           };
@@ -922,14 +542,10 @@ module.exports = async function handler(req, res) {
             );
 
           item.runwayDistance =
-            distanceToRunwayLine(
-              item
-            );
+            distanceToRunwayLine(item);
 
           const threshold =
-            nearestThreshold(
-              item
-            );
+            nearestThreshold(item);
 
           item.nearestRunway =
             threshold.runway
@@ -952,112 +568,74 @@ module.exports = async function handler(req, res) {
 
           return item;
         })
-
         .filter(
           ac =>
             ac.id
         );
 
-    // =====================================================
-    // TRACK HISTORIES
-    // =====================================================
-
     const tracks =
-      savedState
-      &&
-      savedState.tracks
-      &&
+      savedState &&
+      savedState.tracks &&
       typeof savedState.tracks === "object"
-
         ? savedState.tracks
-
         : {};
 
     function recentGroundSample(
       samples,
       seconds
     ) {
-
       const cutoff =
         now -
         seconds * 1000;
 
       return samples.some(
         sample =>
-          sample.time >= cutoff
-          &&
+          sample.time >= cutoff &&
           sample.onGround
       );
     }
-
-    // =====================================================
-    // CLASSIFIER
-    // =====================================================
 
     function classify(
       ac,
       history,
       previousState
     ) {
-
       const samples =
         history.slice(-12);
 
       const first =
-        samples[0] ||
-        null;
+        samples[0] || null;
 
       const last =
-        samples[
-          samples.length - 1
-        ] ||
-        null;
+        samples[samples.length - 1] || null;
 
       const prior =
         samples.length >= 2
-          ? samples[
-              samples.length - 2
-            ]
+          ? samples[samples.length - 2]
           : null;
 
       const distanceChange =
-        first &&
-        last
-
-          ? last.airportDistance
-            -
+        first && last
+          ? last.airportDistance -
             first.airportDistance
-
           : 0;
 
       const altitudeChange =
-        first
-        &&
-        last
-        &&
-        first.altitude !== null
-        &&
+        first &&
+        last &&
+        first.altitude !== null &&
         last.altitude !== null
-
-          ? last.altitude
-            -
+          ? last.altitude -
             first.altitude
-
           : 0;
 
       const speedChange =
-        first
-        &&
-        last
-        &&
-        first.speed !== null
-        &&
+        first &&
+        last &&
+        first.speed !== null &&
         last.speed !== null
-
-          ? last.speed
-            -
+          ? last.speed -
             first.speed
-
           : 0;
 
       const closing =
@@ -1068,8 +646,7 @@ module.exports = async function handler(req, res) {
 
       const descending =
         (
-          ac.verticalRate !== null
-          &&
+          ac.verticalRate !== null &&
           ac.verticalRate < -150
         )
         ||
@@ -1077,8 +654,7 @@ module.exports = async function handler(req, res) {
 
       const climbing =
         (
-          ac.verticalRate !== null
-          &&
+          ac.verticalRate !== null &&
           ac.verticalRate > 250
         )
         ||
@@ -1097,272 +673,155 @@ module.exports = async function handler(req, res) {
         );
 
       const justAirborne =
-        prior
-        &&
-        prior.onGround
-        &&
+        prior &&
+        prior.onGround &&
         !ac.onGround;
 
       const justLanded =
-        prior
-        &&
-        !prior.onGround
-        &&
+        prior &&
+        !prior.onGround &&
         ac.onGround;
-
-      // ---------------------------------------------
-      // GROUND
-      // ---------------------------------------------
 
       if (ac.onGround) {
 
         if (
-          justLanded
-          ||
-          previousState === "ON_FINAL"
-          ||
+          justLanded ||
+          previousState === "ON_FINAL" ||
           previousState === "APPROACHING"
         ) {
-
           return {
-            state:
-              "LANDED",
-
-            confidence:
-              98,
-
-            reason:
-              "Air-to-ground transition after arrival"
+            state: "LANDED",
+            confidence: 98,
+            reason: "Air-to-ground transition after arrival"
           };
         }
 
         if (
-          nearRunway
-          &&
-          ac.speed !== null
-          &&
-          ac.speed >= 45
-          &&
+          nearRunway &&
+          ac.speed !== null &&
+          ac.speed >= 45 &&
           speedChange > 2
         ) {
-
           return {
-            state:
-              "TAKEOFF_ROLL",
-
-            confidence:
-              96,
-
-            reason:
-              "Accelerating rapidly on runway"
+            state: "TAKEOFF_ROLL",
+            confidence: 96,
+            reason: "Accelerating rapidly on runway"
           };
         }
 
         if (
-          nearRunway
-          &&
-          ac.speed !== null
-          &&
-          ac.speed >= 10
-          &&
+          nearRunway &&
+          ac.speed !== null &&
+          ac.speed >= 10 &&
           ac.speed < 45
         ) {
-
           return {
-            state:
-              "LINE_UP_OR_TAXI",
-
-            confidence:
-              72,
-
-            reason:
-              "Moving slowly on or beside runway"
+            state: "LINE_UP_OR_TAXI",
+            confidence: 72,
+            reason: "Moving slowly on or beside runway"
           };
         }
 
         return {
-          state:
-            "GROUND",
-
-          confidence:
-            60,
-
-          reason:
-            "Aircraft on ground"
+          state: "GROUND",
+          confidence: 60,
+          reason: "Aircraft on ground"
         };
       }
 
-      // ---------------------------------------------
-      // DEPARTURES
-      // ---------------------------------------------
-
       if (
-        justAirborne
-        ||
-        previousState ===
-          "TAKEOFF_ROLL"
+        justAirborne ||
+        previousState === "TAKEOFF_ROLL"
       ) {
-
         return {
-          state:
-            "AIRBORNE_DEPARTURE",
-
-          confidence:
-            99,
-
-          reason:
-            "Ground-to-air transition"
+          state: "AIRBORNE_DEPARTURE",
+          confidence: 99,
+          reason: "Ground-to-air transition"
         };
       }
 
       if (
-        recentGround
-        &&
-        ac.airportDistance <= 10
-        &&
+        recentGround &&
+        ac.airportDistance <= 10 &&
         climbing
       ) {
-
         return {
-          state:
-            "DEPARTING",
-
-          confidence:
-            96,
-
-          reason:
-            "Recently on ground and now climbing away"
+          state: "DEPARTING",
+          confidence: 96,
+          reason: "Recently on ground and now climbing away"
         };
       }
 
-      // ---------------------------------------------
-      // ARRIVALS
-      // ---------------------------------------------
-
       if (
-        ac.airportDistance <= 12
-        &&
-        ac.altitude !== null
-        &&
-        ac.altitude <= 4200
-        &&
-        aligned
-        &&
-        closing
-        &&
+        ac.airportDistance <= 12 &&
+        ac.altitude !== null &&
+        ac.altitude <= 4200 &&
+        aligned &&
+        closing &&
         !climbing
       ) {
-
         const final =
-          ac.thresholdDistance <= 8
-          &&
-          ac.altitude <= 3000
-          &&
+          ac.thresholdDistance <= 8 &&
+          ac.altitude <= 3000 &&
           descending;
 
         if (final) {
-
           return {
-            state:
-              "ON_FINAL",
-
-            confidence:
-              96,
-
-            reason:
-              "Aligned, descending and closing on runway threshold"
+            state: "ON_FINAL",
+            confidence: 96,
+            reason: "Aligned, descending and closing on runway threshold"
           };
         }
 
         return {
-          state:
-            "APPROACHING",
-
-          confidence:
-            90,
-
-          reason:
-            "Aligned and closing on airport"
+          state: "APPROACHING",
+          confidence: 90,
+          reason: "Aligned and closing on airport"
         };
       }
 
       if (
-        ac.airportDistance <= 15
-        &&
-        ac.altitude !== null
-        &&
-        ac.altitude <= 5000
-        &&
-        closing
-        &&
+        ac.airportDistance <= 15 &&
+        ac.altitude !== null &&
+        ac.altitude <= 5000 &&
+        closing &&
         descending
       ) {
-
         return {
-          state:
-            "APPROACHING",
-
-          confidence:
-            82,
-
-          reason:
-            "Low, descending and closing on airport"
+          state: "APPROACHING",
+          confidence: 82,
+          reason: "Low, descending and closing on airport"
         };
       }
 
       if (
-        ac.airportDistance <= 12
-        &&
-        opening
-        &&
+        ac.airportDistance <= 12 &&
+        opening &&
         climbing
       ) {
-
         return {
-          state:
-            "DEPARTING",
-
-          confidence:
-            88,
-
-          reason:
-            "Climbing and increasing distance from airport"
+          state: "DEPARTING",
+          confidence: 88,
+          reason: "Climbing and increasing distance from airport"
         };
       }
 
       return {
-        state:
-          "AIRBORNE",
-
-        confidence:
-          50,
-
-        reason:
-          "No strong arrival/departure evidence yet"
+        state: "AIRBORNE",
+        confidence: 50,
+        reason: "No strong arrival/departure evidence yet"
       };
     }
 
-    // =====================================================
-    // UPDATE HISTORIES
-    // =====================================================
-
     const classified = [];
+    const seenIds = new Set();
 
-    const seenIds =
-      new Set();
+    for (const ac of aircraft) {
 
-    for (
-      const ac
-      of aircraft
-    ) {
-
-      seenIds.add(
-        ac.id
-      );
+      seenIds.add(ac.id);
 
       const track =
-        tracks[ac.id]
-        ||
+        tracks[ac.id] ||
         {
           samples: [],
           state: "UNKNOWN",
@@ -1370,90 +829,57 @@ module.exports = async function handler(req, res) {
         };
 
       track.samples =
-        Array.isArray(
-          track.samples
-        )
+        Array.isArray(track.samples)
           ? track.samples
           : [];
 
       track.samples.push({
-
-        time:
-          now,
-
-        lat:
-          ac.lat,
-
-        lon:
-          ac.lon,
-
-        altitude:
-          ac.altitude,
-
-        onGround:
-          ac.onGround,
-
-        speed:
-          ac.speed,
-
-        track:
-          ac.track,
-
-        verticalRate:
-          ac.verticalRate,
-
-        airportDistance:
-          ac.airportDistance,
-
-        runwayDistance:
-          ac.runwayDistance,
-
-        thresholdDistance:
-          ac.thresholdDistance,
-
-        runwayAlignment:
-          ac.runwayAlignment
+        time: now,
+        lat: ac.lat,
+        lon: ac.lon,
+        altitude: ac.altitude,
+        onGround: ac.onGround,
+        speed: ac.speed,
+        track: ac.track,
+        verticalRate: ac.verticalRate,
+        airportDistance: ac.airportDistance,
+        runwayDistance: ac.runwayDistance,
+        thresholdDistance: ac.thresholdDistance,
+        runwayAlignment: ac.runwayAlignment
       });
 
       track.samples =
         track.samples
-
           .filter(
             sample =>
               sample.time >=
               now - 120000
           )
-
           .slice(-24);
 
-   let decision =
-  classify(
-    ac,
-    track.samples,
-    track.state
-  );
+      let decision =
+        classify(
+          ac,
+          track.samples,
+          track.state
+        );
 
-// Keep a landed aircraft in the LANDED state
-// for 90 seconds after touchdown.
-// This stops the arrival disappearing immediately.
-if (
-  track.state === "LANDED"
-  &&
-  ac.onGround
-  &&
-  now - track.stateSince < 90000
-) {
-  decision = {
-    state: "LANDED",
-    confidence: 98,
-    reason: "Post-landing hold during rollout"
-  };
-}
+      if (
+        track.state === "LANDED" &&
+        ac.onGround &&
+        now - track.stateSince < 90000
+      ) {
+        decision = {
+          state: "LANDED",
+          confidence: 98,
+          reason: "Post-landing hold during rollout"
+        };
+      }
 
-if (
-  decision.state !==
-  track.state
-) {
+      if (
+        decision.state !==
+        track.state
+      ) {
         track.state =
           decision.state;
 
@@ -1474,7 +900,6 @@ if (
         track;
 
       classified.push({
-
         ...ac,
 
         state:
@@ -1491,9 +916,7 @@ if (
             (
               now -
               track.stateSince
-            )
-            /
-            1000
+            ) / 1000
           ),
 
         sampleCount:
@@ -1501,196 +924,394 @@ if (
       });
     }
 
-    // =====================================================
-    // CLEAN OLD TRACKS
-    // =====================================================
-
     for (
-      const [
-        id,
-        track
-      ]
-      of Object.entries(
-        tracks
-      )
+      const [id, track]
+      of Object.entries(tracks)
     ) {
-
       if (
-        !seenIds.has(id)
-        &&
+        !seenIds.has(id) &&
         (
-          !track.lastSeen
-          ||
+          !track.lastSeen ||
           track.lastSeen <
             now - 180000
         )
       ) {
-
         delete tracks[id];
       }
     }
 
-    // =====================================================
-    // STATE COUNTS
-    // =====================================================
-
     const stateCounts = {};
 
-    for (
-      const ac
-      of classified
-    ) {
-
-      stateCounts[
-        ac.state
-      ] =
+    for (const ac of classified) {
+      stateCounts[ac.state] =
         (
-          stateCounts[
-            ac.state
-          ]
-          ||
+          stateCounts[ac.state] ||
           0
-        )
-        +
-        1;
+        ) + 1;
     }
 
-    // =====================================================
-    // NEXT ARRIVAL
-    // =====================================================
+    function displayObject(
+      ac,
+      score = null
+    ) {
+      if (!ac) {
+        return null;
+      }
 
-    const nextArrival =
-      classified
+      return {
+        id: ac.id,
+        callsign: ac.callsign,
+        registration: ac.registration,
+        type: ac.type,
+        state: ac.state,
+        confidence: ac.confidence,
+        runway: ac.nearestRunway,
 
-       .filter(
-  ac =>
-    [
-      "ON_FINAL",
-      "APPROACHING",
-      "LANDED"
-    ]
-    .includes(
-      ac.state
-    )
-)
+        distanceKm:
+          Number(
+            ac.airportDistance.toFixed(2)
+          ),
 
-        .sort(
-          (a, b) => {
+        thresholdKm:
+          Number(
+            ac.thresholdDistance.toFixed(2)
+          ),
 
-            if (
-              a.state === "ON_FINAL"
-              &&
-              b.state !== "ON_FINAL"
-            ) {
-              return -1;
-            }
+        altitude: ac.altitude,
+        speed: ac.speed,
+        stateAgeSeconds:
+          ac.stateAgeSeconds,
+        score
+      };
+    }
 
-            if (
-              b.state === "ON_FINAL"
-              &&
-              a.state !== "ON_FINAL"
-            ) {
-              return 1;
-            }
+    function currentScore(ac) {
+      const stateBase = {
+        TAKEOFF_ROLL: 1000,
+        AIRBORNE_DEPARTURE: 980,
+        ON_FINAL: 970,
+        LANDED: 930,
+        DEPARTING: 900,
+        APPROACHING: 860,
+        LINE_UP_OR_TAXI: 760
+      };
 
-            return (
-              a.thresholdDistance
-              -
-              b.thresholdDistance
-            );
+      if (!(ac.state in stateBase)) {
+        return -Infinity;
+      }
+
+      if (
+        ac.state === "DEPARTING" &&
+        ac.airportDistance > 4
+      ) {
+        return -Infinity;
+      }
+
+      let score =
+        stateBase[ac.state];
+
+      score +=
+        Math.max(
+          0,
+          160 -
+          ac.airportDistance * 18
+        );
+
+      score +=
+        (ac.confidence || 0) * 1.2;
+
+      if (
+        ac.state === "ON_FINAL"
+      ) {
+        score +=
+          Math.max(
+            0,
+            140 -
+            ac.thresholdDistance * 18
+          );
+      }
+
+      if (
+        ac.state === "TAKEOFF_ROLL"
+      ) {
+        score += 180;
+      }
+
+      if (
+        ac.state === "AIRBORNE_DEPARTURE"
+      ) {
+        score += 150;
+      }
+
+      return score;
+    }
+
+    function arrivalCandidates(
+      excludeId = null
+    ) {
+      return classified
+        .filter(
+          ac =>
+            ac.id !== excludeId &&
+            [
+              "ON_FINAL",
+              "APPROACHING",
+              "LANDED"
+            ].includes(ac.state)
+        )
+        .sort((a, b) => {
+          const priority = {
+            ON_FINAL: 0,
+            APPROACHING: 1,
+            LANDED: 2
+          };
+
+          const pa =
+            priority[a.state] ?? 9;
+
+          const pb =
+            priority[b.state] ?? 9;
+
+          if (pa !== pb) {
+            return pa - pb;
           }
-        )[0]
-        ||
-        null;
 
-    // =====================================================
-    // NEXT DEPARTURE
-    // =====================================================
+          return (
+            a.thresholdDistance -
+            b.thresholdDistance
+          );
+        });
+    }
 
-    const nextDeparture =
+    function departureCandidates(
+      excludeId = null
+    ) {
+      return classified
+        .filter(ac => {
+
+          if (
+            ac.id === excludeId
+          ) {
+            return false;
+          }
+
+          if (
+            ![
+              "TAKEOFF_ROLL",
+              "AIRBORNE_DEPARTURE",
+              "DEPARTING",
+              "LINE_UP_OR_TAXI"
+            ].includes(ac.state)
+          ) {
+            return false;
+          }
+
+          if (
+            ac.state === "DEPARTING" &&
+            ac.airportDistance > 4
+          ) {
+            return false;
+          }
+
+          return true;
+        })
+        .sort((a, b) => {
+          const priority = {
+            TAKEOFF_ROLL: 0,
+            AIRBORNE_DEPARTURE: 1,
+            LINE_UP_OR_TAXI: 2,
+            DEPARTING: 3
+          };
+
+          const pa =
+            priority[a.state] ?? 9;
+
+          const pb =
+            priority[b.state] ?? 9;
+
+          if (pa !== pb) {
+            return pa - pb;
+          }
+
+          return (
+            a.airportDistance -
+            b.airportDistance
+          );
+        });
+    }
+
+    const selection =
+      savedState &&
+      savedState.selection &&
+      typeof savedState.selection === "object"
+        ? savedState.selection
+        : {
+            currentId: null,
+            currentSince: 0
+          };
+
+    const scored =
       classified
+        .map(ac => ({
+          ac,
+          score:
+            currentScore(ac)
+        }))
+        .filter(
+          item =>
+            Number.isFinite(item.score)
+        )
+        .sort(
+          (a, b) =>
+            b.score - a.score
+        );
 
-       .filter(
-  ac => {
+    const challenger =
+      scored[0] || null;
 
-    const allowedState =
-      [
-        "TAKEOFF_ROLL",
-        "AIRBORNE_DEPARTURE",
-        "DEPARTING",
-        "LINE_UP_OR_TAXI"
-      ]
-      .includes(
-        ac.state
-      );
+    const existingCurrent =
+      selection.currentId
+        ? classified.find(
+            ac =>
+              ac.id ===
+              selection.currentId
+          )
+        : null;
 
-    if (!allowedState) {
-      return false;
+    const existingScore =
+      existingCurrent
+        ? currentScore(existingCurrent)
+        : -Infinity;
+
+    const currentAge =
+      selection.currentSince
+        ? now -
+          selection.currentSince
+        : Infinity;
+
+    const MIN_CURRENT_HOLD_MS =
+      20000;
+
+    const SWITCH_MARGIN =
+      120;
+
+    let current =
+      existingCurrent;
+
+    if (
+      !current ||
+      !Number.isFinite(existingScore)
+    ) {
+      current =
+        challenger
+          ? challenger.ac
+          : null;
+    }
+    else if (
+      challenger &&
+      challenger.ac.id !==
+        current.id &&
+      (
+        currentAge >=
+          MIN_CURRENT_HOLD_MS ||
+        challenger.ac.state ===
+          "TAKEOFF_ROLL" ||
+        challenger.ac.state ===
+          "AIRBORNE_DEPARTURE"
+      ) &&
+      challenger.score >
+        existingScore +
+        SWITCH_MARGIN
+    ) {
+      current =
+        challenger.ac;
     }
 
     if (
-      ac.state === "DEPARTING"
-      &&
-      ac.airportDistance > 4
+      current &&
+      current.id !==
+        selection.currentId
     ) {
-      return false;
+      selection.currentId =
+        current.id;
+
+      selection.currentSince =
+        now;
     }
 
-    return true;
-  }
-)
-        .sort(
-          (a, b) => {
-
-            const priority = {
-              TAKEOFF_ROLL: 0,
-              AIRBORNE_DEPARTURE: 1,
-              DEPARTING: 2,
-              LINE_UP_OR_TAXI: 3
-            };
-
-            const pa =
-              priority[a.state] ?? 9;
-
-            const pb =
-              priority[b.state] ?? 9;
-
-            if (pa !== pb) {
-              return pa - pb;
-            }
-
-            return (
-              a.airportDistance
-              -
-              b.airportDistance
-            );
-          }
-        )[0]
-        ||
+    if (!current) {
+      selection.currentId =
         null;
 
-    // =====================================================
-    // SAVE STATE
-    // =====================================================
+      selection.currentSince =
+        0;
+    }
+
+    const currentId =
+      current
+        ? current.id
+        : null;
+
+    const nextIn =
+      arrivalCandidates(
+        currentId
+      )[0] || null;
+
+    const nextOut =
+      departureCandidates(
+        currentId
+      )[0] || null;
+
+    const nextArrival =
+      arrivalCandidates(
+        null
+      )[0] || null;
+
+    const nextDeparture =
+      departureCandidates(
+        null
+      )[0] || null;
+
+    const intelligence = {
+      stateCounts,
+
+      current:
+        displayObject(
+          current,
+          current
+            ? Math.round(
+                currentScore(current)
+              )
+            : null
+        ),
+
+      nextIn:
+        displayObject(nextIn),
+
+      nextOut:
+        displayObject(nextOut),
+
+      nextArrival:
+        displayObject(nextArrival),
+
+      nextDeparture:
+        displayObject(nextDeparture)
+    };
 
     const stateToStore = {
-
-      updatedAt:
-        now,
-
+      updatedAt: now,
       tracks,
-
+      selection,
+      lastIntelligence:
+        intelligence,
       lastGoodTimestamp:
         now,
-
       lastGoodAircraft:
         classified
     };
 
     if (redisAvailable) {
-
       try {
-
         await redisCommand([
           "SET",
           stateKey,
@@ -1701,34 +1322,26 @@ if (
           "900"
         ]);
 
-        redisWriteOK =
-          true;
-      }
-      catch (error) {
+        redisWriteOK = true;
 
+      } catch (error) {
         redisError =
-          redisError
-          ||
+          redisError ||
           error.message;
       }
     }
 
-    // =====================================================
-    // RESPONSE
-    // =====================================================
-
     return res.status(200).json({
-
       ok: true,
 
       engine:
         "MikeAircraft Engine v2",
 
       version:
-        "0.4.1",
+        "0.5",
 
       stage:
-        "FILTERED_STATE_TRACKING",
+        "CURRENT_NEXT_SELECTION",
 
       dataStatus:
         "LIVE",
@@ -1737,7 +1350,6 @@ if (
         new Date(now).toISOString(),
 
       airport: {
-
         code:
           airportCode,
 
@@ -1755,7 +1367,6 @@ if (
       },
 
       traffic: {
-
         rawCount:
           rawAircraft.length,
 
@@ -1770,7 +1381,6 @@ if (
       },
 
       memory: {
-
         redisConnected:
           redisAvailable,
 
@@ -1789,122 +1399,29 @@ if (
           redisError
       },
 
-      intelligence: {
-
-        stateCounts,
-
-        nextArrival:
-          nextArrival
-            ? {
-
-                id:
-                  nextArrival.id,
-
-                callsign:
-                  nextArrival.callsign,
-
-                registration:
-                  nextArrival.registration,
-
-                type:
-                  nextArrival.type,
-
-                state:
-                  nextArrival.state,
-
-                confidence:
-                  nextArrival.confidence,
-
-                runway:
-                  nextArrival.nearestRunway,
-
-                distanceKm:
-                  Number(
-                    nextArrival
-                      .airportDistance
-                      .toFixed(2)
-                  ),
-
-                thresholdKm:
-                  Number(
-                    nextArrival
-                      .thresholdDistance
-                      .toFixed(2)
-                  ),
-
-                altitude:
-                  nextArrival.altitude,
-
-                speed:
-                  nextArrival.speed
-              }
-            : null,
-
-        nextDeparture:
-          nextDeparture
-            ? {
-
-                id:
-                  nextDeparture.id,
-
-                callsign:
-                  nextDeparture.callsign,
-
-                registration:
-                  nextDeparture.registration,
-
-                type:
-                  nextDeparture.type,
-
-                state:
-                  nextDeparture.state,
-
-                confidence:
-                  nextDeparture.confidence,
-
-                runway:
-                  nextDeparture.nearestRunway,
-
-                distanceKm:
-                  Number(
-                    nextDeparture
-                      .airportDistance
-                      .toFixed(2)
-                  ),
-
-                altitude:
-                  nextDeparture.altitude,
-
-                speed:
-                  nextDeparture.speed
-              }
-            : null
-      },
+      intelligence,
 
       aircraft:
         classified
     });
-  }
 
-  catch (error) {
-
+  } catch (error) {
     console.error(
       "MikeAircraft Engine v2 error:",
       error
     );
 
     return res.status(500).json({
-
       ok: false,
 
       engine:
         "MikeAircraft Engine v2",
 
       version:
-        "0.4.1",
+        "0.5",
 
       stage:
-        "FILTERED_STATE_TRACKING",
+        "CURRENT_NEXT_SELECTION",
 
       error:
         error.message
