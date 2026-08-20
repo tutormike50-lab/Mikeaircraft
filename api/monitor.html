@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>MikeAircraft Engine Monitor</title>
+
+  <style>
+    body {
+      margin: 0;
+      background: #10141c;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
+
+    .header {
+      background: #1769aa;
+      padding: 20px 30px;
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: 26px;
+    }
+
+    .header p {
+      margin: 5px 0 0;
+      opacity: 0.8;
+    }
+
+    .container {
+      padding: 30px;
+      max-width: 900px;
+      margin: auto;
+    }
+
+    .status {
+      background: #1b2230;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      padding: 9px 0;
+      border-bottom: 1px solid #30394a;
+    }
+
+    .row:last-child {
+      border-bottom: none;
+    }
+
+    .good {
+      color: #58d68d;
+      font-weight: bold;
+    }
+
+    .bad {
+      color: #ff6b6b;
+      font-weight: bold;
+    }
+
+    .waiting {
+      color: #f4d03f;
+      font-weight: bold;
+    }
+
+    #errorBox {
+      display: none;
+      background: #4b2020;
+      border-radius: 10px;
+      padding: 15px;
+      margin-top: 20px;
+      color: #ffb3b3;
+    }
+
+    .small {
+      color: #9da8ba;
+      font-size: 13px;
+      margin-top: 15px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="header">
+    <h1>✈ MikeAircraft Engine Monitor</h1>
+    <p>Persistent aircraft tracking test</p>
+  </div>
+
+  <div class="container">
+
+    <div class="status">
+
+      <div class="row">
+        <span>Engine</span>
+        <span id="engine" class="waiting">WAITING</span>
+      </div>
+
+      <div class="row">
+        <span>ADS-B Source</span>
+        <span id="source">---</span>
+      </div>
+
+      <div class="row">
+        <span>Redis Memory</span>
+        <span id="redis" class="waiting">WAITING</span>
+      </div>
+
+      <div class="row">
+        <span>Aircraft received</span>
+        <span id="aircraft">0</span>
+      </div>
+
+      <div class="row">
+        <span>Aircraft matched to previous snapshot</span>
+        <span id="matched">0</span>
+      </div>
+
+      <div class="row">
+        <span>Previous snapshot age</span>
+        <span id="age">---</span>
+      </div>
+
+      <div class="row">
+        <span>Last successful update</span>
+        <span id="lastUpdate">---</span>
+      </div>
+
+      <div class="row">
+        <span>Automatic refresh</span>
+        <span class="good">Every 5 seconds</span>
+      </div>
+
+    </div>
+
+    <div id="errorBox"></div>
+
+    <div class="small">
+      Leave this page open while testing MikeAircraft.
+      The monitor automatically calls the tracking engine every five seconds.
+    </div>
+
+  </div>
+
+<script>
+
+const AIRPORT = "PRG";
+const UPDATE_INTERVAL = 5000;
+
+async function updateMonitor() {
+
+  try {
+
+    const response = await fetch(
+      "/api/engine?airport=" + encodeURIComponent(AIRPORT) +
+      "&monitor=" + Date.now(),
+      {
+        cache: "no-store"
+      }
+    );
+
+    const data = await response.json();
+
+    if (!data.ok) {
+      throw new Error(data.error || "Engine returned an error");
+    }
+
+    document.getElementById("engine").textContent = "LIVE";
+    document.getElementById("engine").className = "good";
+
+    document.getElementById("source").textContent =
+      data.traffic?.source || data.source || "Unknown";
+
+    document.getElementById("aircraft").textContent =
+      data.traffic?.rawCount ??
+      data.aircraft?.length ??
+      0;
+
+    const memory = data.memory || {};
+
+    if (
+      memory.redisConnected === true &&
+      memory.readOK === true &&
+      memory.writeOK === true
+    ) {
+      document.getElementById("redis").textContent = "CONNECTED";
+      document.getElementById("redis").className = "good";
+    } else {
+      document.getElementById("redis").textContent = "PROBLEM";
+      document.getElementById("redis").className = "bad";
+    }
+
+    document.getElementById("matched").textContent =
+      memory.matchedAircraft ?? 0;
+
+    if (memory.previousAgeSeconds != null) {
+      document.getElementById("age").textContent =
+        memory.previousAgeSeconds + " seconds";
+    } else {
+      document.getElementById("age").textContent = "No previous snapshot";
+    }
+
+    document.getElementById("lastUpdate").textContent =
+      new Date().toLocaleTimeString();
+
+    document.getElementById("errorBox").style.display = "none";
+
+  } catch (error) {
+
+    document.getElementById("engine").textContent = "ERROR";
+    document.getElementById("engine").className = "bad";
+
+    const box = document.getElementById("errorBox");
+    box.style.display = "block";
+    box.textContent = "Engine error: " + error.message;
+  }
+}
+
+updateMonitor();
+
+setInterval(updateMonitor, UPDATE_INTERVAL);
+
+</script>
+
+</body>
+</html>
