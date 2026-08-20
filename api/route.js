@@ -1,6 +1,7 @@
 // MikeAircraft Route Test
-// Version 0.2
-// Tests ADSB.lol route lookup with callsign + live position.
+// Version 0.3
+// Automatic:
+// callsign -> live aircraft position -> route lookup
 
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -11,9 +12,6 @@ module.exports = async function handler(req, res) {
       .trim()
       .toUpperCase();
 
-    const lat = Number(req.query.lat);
-    const lng = Number(req.query.lng);
-
     if (!callsign) {
       return res.status(400).json({
         ok: false,
@@ -21,98 +19,231 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    if (
-      !Number.isFinite(lat) ||
-      !Number.isFinite(lng)
-    ) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing or invalid lat/lng"
-      });
-    }
+    // =====================================================
+    // STEP 1 — FIND LIVE AIRCRAFT BY CALLSIGN
+    // =====================================================
 
-    const controller =
+    const lookupController =
       new AbortController();
 
-    const timeout =
+    const lookupTimeout =
       setTimeout(
-        () => controller.abort(),
+        () => lookupController.abort(),
         8000
       );
 
+    let aircraftData;
+
     try {
-      const response = await fetch(
-        "https://api.adsb.lol/api/0/routeset",
-        {
-          method: "POST",
+      const aircraftResponse =
+        await fetch(
+          "https://api.adsb.lol/v2/callsign/" +
+          encodeURIComponent(callsign),
+          {
+            cache: "no-store",
+            headers: {
+              "Accept": "application/json",
+              "User-Agent":
+                "MikeAircraft-Route-v0.3"
+            },
+            signal:
+              lookupController.signal
+          }
+        );
 
-          headers: {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "MikeAircraft-Route-v0.2"
-          },
+      if (!aircraftResponse.ok) {
+        throw new Error(
+          `Aircraft lookup HTTP ${aircraftResponse.status}`
+        );
+      }
 
-          body: JSON.stringify({
-            planes: [
-              {
-                callsign,
-                lat,
-                lng
-              }
-            ]
-          }),
-
-          signal: controller.signal
-        }
+      aircraftData =
+        await aircraftResponse.json();
+    }
+    finally {
+      clearTimeout(
+        lookupTimeout
       );
+    }
 
-      const raw =
-        await response.text();
+    const aircraftList =
+      Array.isArray(aircraftData.ac)
+        ? aircraftData.ac
+        : [];
 
-      let data = raw;
-
-      try {
-        data =
-          JSON.parse(raw);
-      }
-      catch {
-        // Leave as text if ADSB.lol returns non-JSON.
-      }
-
-      return res.status(200).json({
-        ok: response.ok,
+    if (!aircraftList.length) {
+      return res.status(404).json({
+        ok: false,
 
         service:
           "MikeAircraft Route Test",
 
         version:
-          "0.2",
+          "0.3",
 
-        request: {
-          callsign,
-          lat,
-          lng
-        },
+        callsign,
 
-        adsbLol: {
-          status:
-            response.status,
-
-          response:
-            data
-        }
+        error:
+          "No live aircraft found for this callsign"
       });
     }
-    finally {
-      clearTimeout(timeout);
+
+    // Prefer the first aircraft that has a valid position.
+    const aircraft =
+      aircraftList.find(
+        ac =>
+          Number.isFinite(
+            Number(ac.lat)
+          ) &&
+          Number.isFinite(
+            Number(ac.lon)
+          )
+      );
+
+    if (!aircraft) {
+      return res.status(404).json({
+        ok: false,
+
+        service:
+          "MikeAircraft Route Test",
+
+        version:
+          "0.3",
+
+        callsign,
+
+        error:
+          "Aircraft found but no live position available"
+      });
     }
+
+    const lat =
+      Number(aircraft.lat);
+
+    const lng =
+      Number(aircraft.lon);
+
+    // =====================================================
+    // STEP 2 — ROUTE LOOKUP
+    // =====================================================
+
+    const routeController =
+      new AbortController();
+
+    const routeTimeout =
+      setTimeout(
+        () => routeController.abort(),
+        8000
+      );
+
+    let routeResponse;
+    let routeRaw;
+
+    try {
+      routeResponse =
+        await fetch(
+          "https://api.adsb.lol/api/0/routeset",
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json",
+
+              "Accept":
+                "application/json",
+
+              "User-Agent":
+                "MikeAircraft-Route-v0.3"
+            },
+
+            body:
+              JSON.stringify({
+                planes: [
+                  {
+                    callsign,
+                    lat,
+                    lng
+                  }
+                ]
+              }),
+
+            signal:
+              routeController.signal
+          }
+        );
+
+      routeRaw =
+        await routeResponse.text();
+    }
+    finally {
+      clearTimeout(
+        routeTimeout
+      );
+    }
+
+    let routeData =
+      routeRaw;
+
+    try {
+      routeData =
+        JSON.parse(
+          routeRaw
+        );
+    }
+    catch {
+      // Keep raw text if the response is not JSON.
+    }
+
+    // =====================================================
+    // RESPONSE
+    // =====================================================
+
+    return res.status(200).json({
+      ok:
+        routeResponse.ok,
+
+      service:
+        "MikeAircraft Route Test",
+
+      version:
+        "0.3",
+
+      callsign,
+
+      aircraft: {
+        hex:
+          aircraft.hex || null,
+
+        registration:
+          aircraft.r || null,
+
+        type:
+          aircraft.t || null,
+
+        lat,
+
+        lng
+      },
+
+      adsbLolRoute: {
+        status:
+          routeResponse.status,
+
+        response:
+          routeData
+      }
+    });
   }
   catch (error) {
     const timedOut =
-      error.name === "AbortError";
+      error.name ===
+      "AbortError";
 
     return res.status(
-      timedOut ? 504 : 500
+      timedOut
+        ? 504
+        : 500
     ).json({
       ok: false,
 
@@ -120,11 +251,11 @@ module.exports = async function handler(req, res) {
         "MikeAircraft Route Test",
 
       version:
-        "0.2",
+        "0.3",
 
       error:
         timedOut
-          ? "ADSB.lol route request timed out"
+          ? "ADSB.lol request timed out"
           : error.message
     });
   }
