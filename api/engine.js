@@ -18,7 +18,7 @@ module.exports = async function handler(req, res) {
   try {
     // =====================================================
     // MIKEAIRCRAFT ENGINE v2
-    // Stage 1: Live ADS-B ingestion
+    // Stage 2: ADS-B ingestion + persistent aircraft memory
     // =====================================================
 
     const AIRPORTS = {
@@ -65,6 +65,10 @@ module.exports = async function handler(req, res) {
       }
     };
 
+    // =====================================================
+    // AIRPORT SELECTION
+    // =====================================================
+
     const requestedCode =
       String(req.query.airport || "PRG").toUpperCase();
 
@@ -72,18 +76,74 @@ module.exports = async function handler(req, res) {
       AIRPORTS[requestedCode] || AIRPORTS.PRG;
 
     const airportCode =
-      AIRPORTS[requestedCode] ? requestedCode : "PRG";
+      AIRPORTS[requestedCode]
+        ? requestedCode
+        : "PRG";
 
     const radius = 20;
 
     // =====================================================
+    // REDIS / UPSTASH CONNECTION
+    // Credentials were created automatically by Vercel.
+    // =====================================================
+
+    const redisURL =
+      process.env.MIKEAIRCRAFT_KV_REST_API_URL;
+
+    const redisToken =
+      process.env.MIKEAIRCRAFT_KV_REST_API_TOKEN;
+
+    const redisAvailable =
+      Boolean(redisURL && redisToken);
+
+    async function redisCommand(command) {
+      if (!redisAvailable) {
+        throw new Error(
+          "MikeAircraft Redis environment variables are missing"
+        );
+      }
+
+      const response = await fetch(redisURL, {
+        method: "POST",
+
+        headers: {
+          Authorization:
+            `Bearer ${redisToken}`,
+
+          "Content-Type":
+            "application/json"
+        },
+
+        body:
+          JSON.stringify(command)
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Redis HTTP ${response.status}`
+        );
+      }
+
+      const data =
+        await response.json();
+
+      if (data.error) {
+        throw new Error(
+          `Redis: ${data.error}`
+        );
+      }
+
+      return data.result;
+    }
+
+    // =====================================================
     // DIRECT ADS-B SOURCES
-    // Engine v2 does not depend on nearby.js
     // =====================================================
 
     const sources = [
       {
         name: "adsb.lol",
+
         url:
           `https://api.adsb.lol/v2/point/` +
           `${airport.lat}/${airport.lon}/${radius}`
@@ -91,6 +151,7 @@ module.exports = async function handler(req, res) {
 
       {
         name: "airplanes.live",
+
         url:
           `https://api.airplanes.live/v2/point/` +
           `${airport.lat}/${airport.lon}/${radius}`
@@ -98,6 +159,7 @@ module.exports = async function handler(req, res) {
 
       {
         name: "adsb.fi",
+
         url:
           `https://opendata.adsb.fi/api/v2/lat/` +
           `${airport.lat}/lon/${airport.lon}/dist/${radius}`
@@ -106,43 +168,62 @@ module.exports = async function handler(req, res) {
 
     let rawAircraft = null;
     let sourceUsed = null;
+
     const sourceErrors = [];
 
     for (const source of sources) {
       try {
-        const response = await fetch(source.url, {
-          cache: "no-store",
-          headers: {
-            "User-Agent": "MikeAircraft-Engine-v2"
-          }
-        });
+        const response =
+          await fetch(source.url, {
+            cache: "no-store",
+
+            headers: {
+              "User-Agent":
+                "MikeAircraft-Engine-v2"
+            }
+          });
 
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
+          throw new Error(
+            `HTTP ${response.status}`
+          );
         }
 
-        const text = await response.text();
+        const text =
+          await response.text();
 
         let data;
 
         try {
-          data = JSON.parse(text);
+          data =
+            JSON.parse(text);
         } catch {
-          throw new Error("Source returned non-JSON data");
+          throw new Error(
+            "Source returned non-JSON data"
+          );
         }
 
         if (!Array.isArray(data.ac)) {
-          throw new Error("No aircraft array");
+          throw new Error(
+            "No aircraft array"
+          );
         }
 
-        rawAircraft = data.ac;
-        sourceUsed = source.name;
+        rawAircraft =
+          data.ac;
+
+        sourceUsed =
+          source.name;
+
         break;
 
       } catch (error) {
         sourceErrors.push({
-          source: source.name,
-          error: error.message
+          source:
+            source.name,
+
+          error:
+            error.message
         });
       }
     }
@@ -150,10 +231,19 @@ module.exports = async function handler(req, res) {
     if (!rawAircraft) {
       return res.status(502).json({
         ok: false,
-        engine: "MikeAircraft Engine v2",
-        version: "0.2",
-        stage: "LIVE_INGESTION",
-        error: "All ADS-B sources failed",
+
+        engine:
+          "MikeAircraft Engine v2",
+
+        version:
+          "0.3",
+
+        stage:
+          "PERSISTENT_MEMORY",
+
+        error:
+          "All ADS-B sources failed",
+
         sourceErrors
       });
     }
@@ -162,90 +252,346 @@ module.exports = async function handler(req, res) {
     // STANDARDISE AIRCRAFT DATA
     // =====================================================
 
-    const aircraft = rawAircraft
-      .filter(ac => {
-        return (
-          Number.isFinite(Number(ac.lat)) &&
-          Number.isFinite(Number(ac.lon))
-        );
-      })
-      .map(ac => {
-        const id =
-          ac.hex ||
-          ac.r ||
-          String(ac.flight || "").trim() ||
-          null;
+    const now =
+      Date.now();
 
-        const onGround =
-          ac.alt_baro === "ground" ||
-          ac.alt_geom === "ground";
+    const aircraft =
+      rawAircraft
 
-        let alt = null;
+        .filter(ac => {
+          return (
+            Number.isFinite(Number(ac.lat)) &&
+            Number.isFinite(Number(ac.lon))
+          );
+        })
 
-        if (onGround) {
-          alt = 0;
-        } else if (Number.isFinite(Number(ac.alt_baro))) {
-          alt = Number(ac.alt_baro);
-        } else if (Number.isFinite(Number(ac.alt_geom))) {
-          alt = Number(ac.alt_geom);
-        }
+        .map(ac => {
+          const id =
+            ac.hex ||
+            ac.r ||
+            String(ac.flight || "").trim() ||
+            null;
 
-        let verticalRate = null;
+          const onGround =
+            ac.alt_baro === "ground" ||
+            ac.alt_geom === "ground";
 
-        if (Number.isFinite(Number(ac.baro_rate))) {
-          verticalRate = Number(ac.baro_rate);
-        } else if (Number.isFinite(Number(ac.geom_rate))) {
-          verticalRate = Number(ac.geom_rate);
-        }
+          let altitude = null;
 
-        return {
-          id,
+          if (onGround) {
+            altitude = 0;
+          }
+          else if (
+            Number.isFinite(
+              Number(ac.alt_baro)
+            )
+          ) {
+            altitude =
+              Number(ac.alt_baro);
+          }
+          else if (
+            Number.isFinite(
+              Number(ac.alt_geom)
+            )
+          ) {
+            altitude =
+              Number(ac.alt_geom);
+          }
 
-          hex:
-            ac.hex || null,
+          let verticalRate = null;
 
-          callsign:
-            String(ac.flight || "").trim() || null,
+          if (
+            Number.isFinite(
+              Number(ac.baro_rate)
+            )
+          ) {
+            verticalRate =
+              Number(ac.baro_rate);
+          }
+          else if (
+            Number.isFinite(
+              Number(ac.geom_rate)
+            )
+          ) {
+            verticalRate =
+              Number(ac.geom_rate);
+          }
 
-          registration:
-            ac.r || null,
+          return {
+            id,
 
-          type:
-            ac.t || null,
+            hex:
+              ac.hex || null,
 
-          category:
-            ac.category || null,
+            callsign:
+              String(ac.flight || "").trim() ||
+              null,
+
+            registration:
+              ac.r || null,
+
+            type:
+              ac.t || null,
+
+            category:
+              ac.category || null,
+
+            lat:
+              Number(ac.lat),
+
+            lon:
+              Number(ac.lon),
+
+            altitude,
+
+            onGround,
+
+            speed:
+              Number.isFinite(
+                Number(ac.gs)
+              )
+                ? Number(ac.gs)
+                : null,
+
+            track:
+              Number.isFinite(
+                Number(ac.track)
+              )
+                ? Number(ac.track)
+                : null,
+
+            verticalRate,
+
+            positionAge:
+              Number.isFinite(
+                Number(ac.seen_pos)
+              )
+                ? Number(ac.seen_pos)
+                : null
+          };
+        })
+
+        .filter(ac => ac.id);
+
+    // =====================================================
+    // BUILD COMPACT MEMORY SNAPSHOT
+    //
+    // We store ONE Redis record per airport, rather than
+    // one Redis command for every individual aircraft.
+    // =====================================================
+
+    const memoryKey =
+      `mikeaircraft:v2:${airportCode}:snapshot`;
+
+    const currentSnapshot = {
+      timestamp:
+        now,
+
+      aircraft:
+        aircraft.map(ac => ({
+          id:
+            ac.id,
 
           lat:
-            Number(ac.lat),
+            ac.lat,
 
           lon:
-            Number(ac.lon),
+            ac.lon,
 
           altitude:
-            alt,
+            ac.altitude,
 
-          onGround,
+          onGround:
+            ac.onGround,
 
           speed:
-            Number.isFinite(Number(ac.gs))
-              ? Number(ac.gs)
-              : null,
+            ac.speed,
 
           track:
-            Number.isFinite(Number(ac.track))
-              ? Number(ac.track)
-              : null,
+            ac.track,
 
-          verticalRate,
+          verticalRate:
+            ac.verticalRate
+        }))
+    };
 
-          positionAge:
-            Number.isFinite(Number(ac.seen_pos))
-              ? Number(ac.seen_pos)
-              : null
-        };
-      })
-      .filter(ac => ac.id);
+    // =====================================================
+    // READ PREVIOUS SNAPSHOT
+    // =====================================================
+
+    let previousSnapshot = null;
+    let memoryReadOK = false;
+    let memoryWriteOK = false;
+    let memoryError = null;
+
+    if (redisAvailable) {
+      try {
+        const stored =
+          await redisCommand([
+            "GET",
+            memoryKey
+          ]);
+
+        if (stored) {
+          try {
+            previousSnapshot =
+              JSON.parse(stored);
+
+            memoryReadOK =
+              true;
+          }
+          catch {
+            previousSnapshot =
+              null;
+          }
+        }
+        else {
+          // Redis worked, but this is simply the
+          // first observation for this airport.
+          memoryReadOK =
+            true;
+        }
+
+        // =================================================
+        // WRITE CURRENT SNAPSHOT
+        //
+        // Expire after 10 minutes. If an airport stops being
+        // used, its temporary tracking memory disappears.
+        // =================================================
+
+        await redisCommand([
+          "SET",
+          memoryKey,
+          JSON.stringify(currentSnapshot),
+          "EX",
+          "600"
+        ]);
+
+        memoryWriteOK =
+          true;
+
+      } catch (error) {
+        memoryError =
+          error.message;
+      }
+    }
+    else {
+      memoryError =
+        "Redis environment variables unavailable";
+    }
+
+    // =====================================================
+    // COMPARE CURRENT AIRCRAFT WITH PREVIOUS OBSERVATION
+    // =====================================================
+
+    const previousMap =
+      new Map();
+
+    if (
+      previousSnapshot &&
+      Array.isArray(previousSnapshot.aircraft)
+    ) {
+      for (
+        const oldAircraft
+        of previousSnapshot.aircraft
+      ) {
+        previousMap.set(
+          oldAircraft.id,
+          oldAircraft
+        );
+      }
+    }
+
+    let matchedAircraft = 0;
+
+    const movementSamples = [];
+
+    for (const ac of aircraft) {
+      const previous =
+        previousMap.get(ac.id);
+
+      if (!previous) {
+        continue;
+      }
+
+      matchedAircraft++;
+
+      const altitudeChange =
+        (
+          ac.altitude !== null &&
+          previous.altitude !== null
+        )
+          ? ac.altitude -
+            previous.altitude
+          : null;
+
+      const speedChange =
+        (
+          ac.speed !== null &&
+          previous.speed !== null
+        )
+          ? ac.speed -
+            previous.speed
+          : null;
+
+      const groundTransition =
+        previous.onGround !==
+        ac.onGround;
+
+      if (
+        movementSamples.length < 8
+      ) {
+        movementSamples.push({
+          id:
+            ac.id,
+
+          callsign:
+            ac.callsign,
+
+          wasOnGround:
+            previous.onGround,
+
+          onGround:
+            ac.onGround,
+
+          altitude:
+            ac.altitude,
+
+          altitudeChange,
+
+          speed:
+            ac.speed,
+
+          speedChange,
+
+          verticalRate:
+            ac.verticalRate,
+
+          groundTransition
+        });
+      }
+    }
+
+    // =====================================================
+    // HOW OLD WAS THE PREVIOUS OBSERVATION?
+    // =====================================================
+
+    let previousAgeSeconds = null;
+
+    if (
+      previousSnapshot &&
+      Number.isFinite(
+        Number(previousSnapshot.timestamp)
+      )
+    ) {
+      previousAgeSeconds =
+        Math.round(
+          (
+            now -
+            Number(previousSnapshot.timestamp)
+          ) / 1000
+        );
+    }
 
     // =====================================================
     // RESPONSE
@@ -258,27 +604,72 @@ module.exports = async function handler(req, res) {
         "MikeAircraft Engine v2",
 
       version:
-        "0.2",
+        "0.3",
 
       stage:
-        "LIVE_INGESTION",
+        "PERSISTENT_MEMORY",
 
       timestamp:
-        new Date().toISOString(),
+        new Date(now).toISOString(),
 
       airport: {
-        code: airportCode,
-        icao: airport.icao,
-        name: airport.name,
-        lat: airport.lat,
-        lon: airport.lon
+        code:
+          airportCode,
+
+        icao:
+          airport.icao,
+
+        name:
+          airport.name,
+
+        lat:
+          airport.lat,
+
+        lon:
+          airport.lon
       },
 
       traffic: {
-        rawCount: rawAircraft.length,
-        trackedCount: aircraft.length,
-        source: sourceUsed
+        rawCount:
+          rawAircraft.length,
+
+        trackedCount:
+          aircraft.length,
+
+        source:
+          sourceUsed
       },
+
+      memory: {
+        redisConnected:
+          redisAvailable,
+
+        readOK:
+          memoryReadOK,
+
+        writeOK:
+          memoryWriteOK,
+
+        previousSnapshotFound:
+          Boolean(previousSnapshot),
+
+        previousAgeSeconds,
+
+        previousAircraftCount:
+          previousSnapshot &&
+          Array.isArray(
+            previousSnapshot.aircraft
+          )
+            ? previousSnapshot.aircraft.length
+            : 0,
+
+        matchedAircraft,
+
+        error:
+          memoryError
+      },
+
+      movementSamples,
 
       aircraft
     });
@@ -291,9 +682,18 @@ module.exports = async function handler(req, res) {
 
     return res.status(500).json({
       ok: false,
-      engine: "MikeAircraft Engine v2",
-      version: "0.2",
-      error: error.message
+
+      engine:
+        "MikeAircraft Engine v2",
+
+      version:
+        "0.3",
+
+      stage:
+        "PERSISTENT_MEMORY",
+
+      error:
+        error.message
     });
   }
 };
