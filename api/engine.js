@@ -66,19 +66,11 @@ export default async function handler(req, res) {
 
     // Use the existing MikeAircraft nearby endpoint.
     // This keeps ADS-B access in one place.
-    const host =
-      req.headers["x-forwarded-host"] ||
-      req.headers.host;
-
-    const protocol =
-      req.headers["x-forwarded-proto"] || "https";
-
     const nearbyURL =
-      `${protocol}://${host}/api/nearby` +
-      `?lat=${airport.lat}` +
-      `&lon=${airport.lon}` +
-      `&radius=20`;
-
+  "https://mikeaircraft-9hkn.vercel.app/api/nearby" +
+  `?lat=${airport.lat}` +
+  `&lon=${airport.lon}` +
+  `&radius=20`;
     const response = await fetch(nearbyURL, {
       cache: "no-store"
     });
