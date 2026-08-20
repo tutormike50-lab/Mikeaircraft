@@ -1562,16 +1562,17 @@ if (
     const nextArrival =
       classified
 
-        .filter(
-          ac =>
-            [
-              "ON_FINAL",
-              "APPROACHING"
-            ]
-            .includes(
-              ac.state
-            )
-        )
+       .filter(
+  ac =>
+    [
+      "ON_FINAL",
+      "APPROACHING",
+      "LANDED"
+    ]
+    .includes(
+      ac.state
+    )
+)
 
         .sort(
           (a, b) => {
