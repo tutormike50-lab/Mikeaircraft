@@ -7,6 +7,7 @@ module.exports = async function handler(req, res) {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+
   <meta
     name="viewport"
     content="width=device-width, initial-scale=1.0"
@@ -77,9 +78,9 @@ module.exports = async function handler(req, res) {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 20px;
       padding: 10px 18px;
       border-bottom: 1px solid #273240;
-      gap: 20px;
     }
 
     .row:last-child {
@@ -109,12 +110,6 @@ module.exports = async function handler(req, res) {
 
     .big {
       font-size: 24px;
-    }
-
-    .airportBox {
-      display: flex;
-      align-items: center;
-      gap: 12px;
     }
 
     select {
@@ -161,10 +156,10 @@ module.exports = async function handler(req, res) {
     .targetDetail {
       display: flex;
       justify-content: space-between;
+      gap: 20px;
       border-top: 1px solid #273240;
       padding: 9px 0;
       font-size: 14px;
-      gap: 20px;
     }
 
     .targetDetail span:first-child {
@@ -194,13 +189,6 @@ module.exports = async function handler(req, res) {
       font-size: 13px;
     }
 
-    .footer {
-      color: #74879a;
-      font-size: 12px;
-      text-align: center;
-      margin-top: 18px;
-    }
-
     .pulse {
       display: inline-block;
       width: 9px;
@@ -209,6 +197,23 @@ module.exports = async function handler(req, res) {
       background: #57dc91;
       margin-right: 7px;
       box-shadow: 0 0 8px #57dc91;
+    }
+
+    .pulseWarning {
+      background: #ffd65a;
+      box-shadow: 0 0 8px #ffd65a;
+    }
+
+    .pulseBad {
+      background: #ff6e6e;
+      box-shadow: 0 0 8px #ff6e6e;
+    }
+
+    .footer {
+      color: #74879a;
+      font-size: 12px;
+      text-align: center;
+      margin-top: 18px;
     }
 
     @media (max-width: 800px) {
@@ -224,7 +229,7 @@ module.exports = async function handler(req, res) {
   <div class="header">
     <h1>✈ MikeAircraft Engine Monitor</h1>
     <p>
-      Engine v2 • State Tracking Dashboard
+      Engine v2 • Resilient State Tracking Dashboard
     </p>
   </div>
 
@@ -241,16 +246,14 @@ module.exports = async function handler(req, res) {
       <div class="row">
         <span class="label">Airport</span>
 
-        <div class="airportBox">
-          <select id="airport">
-            <option value="PRG">PRG — Prague</option>
-            <option value="LHR">LHR — Heathrow</option>
-            <option value="FRA">FRA — Frankfurt</option>
-            <option value="AMS">AMS — Amsterdam</option>
-            <option value="CDG">CDG — Paris CDG</option>
-            <option value="MAN">MAN — Manchester</option>
-          </select>
-        </div>
+        <select id="airport">
+          <option value="PRG">PRG — Prague</option>
+          <option value="LHR">LHR — Heathrow</option>
+          <option value="FRA">FRA — Frankfurt</option>
+          <option value="AMS">AMS — Amsterdam</option>
+          <option value="CDG">CDG — Paris CDG</option>
+          <option value="MAN">MAN — Manchester</option>
+        </select>
       </div>
 
       <div class="row">
@@ -262,29 +265,65 @@ module.exports = async function handler(req, res) {
 
       <div class="row">
         <span class="label">Engine version</span>
-        <span id="version" class="value">
-          ---
-        </span>
+        <span id="version" class="value">---</span>
       </div>
 
       <div class="row">
         <span class="label">ADS-B status</span>
-        <span id="dataStatus" class="value">
-          ---
-        </span>
+        <span id="dataStatus" class="value">---</span>
       </div>
 
       <div class="row">
         <span class="label">ADS-B source</span>
-        <span id="source" class="value">
-          ---
+        <span id="source" class="value">---</span>
+      </div>
+
+      <div class="row">
+        <span class="label">Redis memory</span>
+        <span id="redis" class="value waiting">
+          WAITING
+        </span>
+      </div>
+
+    </div>
+
+    <div class="card">
+
+      <div class="cardTitle">
+        HEARTBEAT
+      </div>
+
+      <div class="row">
+        <span class="label">Successful polls</span>
+        <span id="pollCount" class="value big">0</span>
+      </div>
+
+      <div class="row">
+        <span class="label">Consecutive errors</span>
+        <span id="errorCount" class="value">0</span>
+      </div>
+
+      <div class="row">
+        <span class="label">Last successful poll</span>
+        <span id="lastUpdate" class="value">---</span>
+      </div>
+
+      <div class="row">
+        <span class="label">Last success age</span>
+        <span id="lastAge" class="value waiting">---</span>
+      </div>
+
+      <div class="row">
+        <span class="label">Current request</span>
+        <span id="requestState" class="value">
+          IDLE
         </span>
       </div>
 
       <div class="row">
-        <span class="label">Redis Memory</span>
-        <span id="redis" class="value waiting">
-          WAITING
+        <span class="label">Automatic retry</span>
+        <span class="value good">
+          Every 5 seconds
         </span>
       </div>
 
@@ -301,10 +340,7 @@ module.exports = async function handler(req, res) {
           Aircraft currently tracked
         </span>
 
-        <span
-          id="aircraft"
-          class="value big"
-        >
+        <span id="aircraft" class="value big">
           0
         </span>
       </div>
@@ -314,34 +350,8 @@ module.exports = async function handler(req, res) {
           Persistent aircraft histories
         </span>
 
-        <span
-          id="histories"
-          class="value big"
-        >
+        <span id="histories" class="value big">
           0
-        </span>
-      </div>
-
-      <div class="row">
-        <span class="label">
-          Last successful update
-        </span>
-
-        <span
-          id="lastUpdate"
-          class="value"
-        >
-          ---
-        </span>
-      </div>
-
-      <div class="row">
-        <span class="label">
-          Update interval
-        </span>
-
-        <span class="value good">
-          5 seconds
         </span>
       </div>
 
@@ -353,10 +363,7 @@ module.exports = async function handler(req, res) {
         AIRCRAFT STATES
       </div>
 
-      <div
-        id="stateList"
-        class="stateList"
-      >
+      <div id="stateList" class="stateList">
         <span class="statePill">
           Waiting for state data...
         </span>
@@ -372,21 +379,18 @@ module.exports = async function handler(req, res) {
           NEXT ARRIVAL
         </div>
 
-        <div
-          id="arrivalBox"
-          class="targetBox"
-        >
+        <div class="targetBox">
 
           <div
-            class="targetName arrival"
             id="arrivalName"
+            class="targetName arrival"
           >
             NONE
           </div>
 
           <div
-            class="targetState arrival"
             id="arrivalState"
+            class="targetState arrival"
           >
             Waiting...
           </div>
@@ -431,8 +435,8 @@ module.exports = async function handler(req, res) {
             <strong id="arrivalConfidence">---</strong>
           </div>
 
+        </div>
       </div>
-    </div>
 
       <div class="card">
 
@@ -440,21 +444,18 @@ module.exports = async function handler(req, res) {
           NEXT DEPARTURE
         </div>
 
-        <div
-          id="departureBox"
-          class="targetBox"
-        >
+        <div class="targetBox">
 
           <div
-            class="targetName departure"
             id="departureName"
+            class="targetName departure"
           >
             NONE
           </div>
 
           <div
-            class="targetState departure"
             id="departureState"
+            class="targetState departure"
           >
             Waiting...
           </div>
@@ -506,40 +507,18 @@ module.exports = async function handler(req, res) {
       </div>
 
       <div class="row">
-        <span class="label">
-          Redis read
-        </span>
-
-        <span
-          id="read"
-          class="value"
-        >
-          ---
-        </span>
+        <span class="label">Redis read</span>
+        <span id="read" class="value">---</span>
       </div>
 
       <div class="row">
-        <span class="label">
-          Redis write
-        </span>
-
-        <span
-          id="write"
-          class="value"
-        >
-          ---
-        </span>
+        <span class="label">Redis write</span>
+        <span id="write" class="value">---</span>
       </div>
 
       <div class="row">
-        <span class="label">
-          Memory error
-        </span>
-
-        <span
-          id="memoryError"
-          class="value"
-        >
+        <span class="label">Memory error</span>
+        <span id="memoryError" class="value">
           NONE
         </span>
       </div>
@@ -547,7 +526,7 @@ module.exports = async function handler(req, res) {
     </div>
 
     <div class="footer">
-      MikeAircraft Engine v2 • Development Monitor
+      MikeAircraft Engine v2 • Resilient Development Monitor
     </div>
 
   </div>
@@ -555,12 +534,20 @@ module.exports = async function handler(req, res) {
 <script>
 
   const UPDATE_INTERVAL = 5000;
+  const REQUEST_TIMEOUT = 12000;
 
   let busy = false;
+  let successfulPolls = 0;
+  let consecutiveErrors = 0;
+  let lastSuccessTime = null;
 
   function text(id, value) {
-    document.getElementById(id).textContent =
-      value;
+    const element =
+      document.getElementById(id);
+
+    if (element) {
+      element.textContent = value;
+    }
   }
 
   function setStatus(id, value, good) {
@@ -568,8 +555,11 @@ module.exports = async function handler(req, res) {
     const element =
       document.getElementById(id);
 
-    element.textContent =
-      value;
+    if (!element) {
+      return;
+    }
+
+    element.textContent = value;
 
     element.className =
       "value " +
@@ -592,6 +582,9 @@ module.exports = async function handler(req, res) {
       text(prefix + "Type", "---");
       text(prefix + "Runway", "---");
       text(prefix + "Distance", "---");
+      text(prefix + "Altitude", "---");
+      text(prefix + "Speed", "---");
+      text(prefix + "Confidence", "---");
 
       if (
         document.getElementById(
@@ -603,10 +596,6 @@ module.exports = async function handler(req, res) {
           "---"
         );
       }
-
-      text(prefix + "Altitude", "---");
-      text(prefix + "Speed", "---");
-      text(prefix + "Confidence", "---");
 
       return;
     }
@@ -651,7 +640,6 @@ module.exports = async function handler(req, res) {
         prefix + "Threshold"
       )
     ) {
-
       text(
         prefix + "Threshold",
         target.thresholdKm != null
@@ -744,6 +732,49 @@ module.exports = async function handler(req, res) {
       );
   }
 
+  function updateAgeDisplay() {
+
+    if (!lastSuccessTime) {
+      setStatus(
+        "lastAge",
+        "No successful poll yet",
+        null
+      );
+
+      return;
+    }
+
+    const seconds =
+      Math.floor(
+        (
+          Date.now() -
+          lastSuccessTime
+        ) / 1000
+      );
+
+    if (seconds <= 10) {
+      setStatus(
+        "lastAge",
+        seconds + " sec ago",
+        true
+      );
+    }
+    else if (seconds <= 30) {
+      setStatus(
+        "lastAge",
+        seconds + " sec ago",
+        null
+      );
+    }
+    else {
+      setStatus(
+        "lastAge",
+        seconds + " sec ago",
+        false
+      );
+    }
+  }
+
   async function updateMonitor() {
 
     if (busy) {
@@ -752,12 +783,27 @@ module.exports = async function handler(req, res) {
 
     busy = true;
 
+    setStatus(
+      "requestState",
+      "REQUESTING",
+      null
+    );
+
     const airport =
       document
         .getElementById(
           "airport"
         )
         .value;
+
+    const controller =
+      new AbortController();
+
+    const timeout =
+      setTimeout(
+        () => controller.abort(),
+        REQUEST_TIMEOUT
+      );
 
     try {
 
@@ -772,8 +818,8 @@ module.exports = async function handler(req, res) {
           Date.now(),
 
           {
-            cache:
-              "no-store"
+            cache: "no-store",
+            signal: controller.signal
           }
         );
 
@@ -783,48 +829,52 @@ module.exports = async function handler(req, res) {
       let data;
 
       try {
-
         data =
           JSON.parse(raw);
-
       }
       catch {
-
         throw new Error(
           "Engine returned non-JSON data"
         );
       }
 
       if (
-        !response.ok
-        ||
+        !response.ok ||
         !data.ok
       ) {
-
         throw new Error(
           data.error ||
           "Engine request failed"
         );
       }
 
-      const traffic =
-        data.traffic || {};
+      successfulPolls++;
+      consecutiveErrors = 0;
+      lastSuccessTime = Date.now();
 
-      const memory =
-        data.memory || {};
+      text(
+        "pollCount",
+        successfulPolls
+      );
 
-      const intelligence =
-        data.intelligence || {};
+      text(
+        "errorCount",
+        consecutiveErrors
+      );
 
-      document.getElementById(
-        "engine"
-      ).innerHTML =
-        '<span class="pulse"></span>LIVE';
+      document
+        .getElementById(
+          "engine"
+        )
+        .innerHTML =
+          '<span class="pulse"></span>LIVE';
 
-      document.getElementById(
-        "engine"
-      ).className =
-        "value good";
+      document
+        .getElementById(
+          "engine"
+        )
+        .className =
+          "value good";
 
       text(
         "version",
@@ -841,6 +891,15 @@ module.exports = async function handler(req, res) {
           ? true
           : null
       );
+
+      const traffic =
+        data.traffic || {};
+
+      const memory =
+        data.memory || {};
+
+      const intelligence =
+        data.intelligence || {};
 
       text(
         "source",
@@ -898,7 +957,6 @@ module.exports = async function handler(req, res) {
           )
           .className =
             "value bad";
-
       }
       else {
 
@@ -935,6 +993,12 @@ module.exports = async function handler(req, res) {
           .toLocaleTimeString()
       );
 
+      setStatus(
+        "requestState",
+        "IDLE",
+        true
+      );
+
       document
         .getElementById(
           "errorBox"
@@ -945,11 +1009,33 @@ module.exports = async function handler(req, res) {
 
     catch (error) {
 
-      setStatus(
-        "engine",
-        "ERROR",
-        false
+      consecutiveErrors++;
+
+      text(
+        "errorCount",
+        consecutiveErrors
       );
+
+      setStatus(
+        "requestState",
+        "RETRYING",
+        null
+      );
+
+      if (!lastSuccessTime) {
+        setStatus(
+          "engine",
+          "ERROR",
+          false
+        );
+      }
+      else {
+        setStatus(
+          "engine",
+          "RECOVERING",
+          null
+        );
+      }
 
       const box =
         document.getElementById(
@@ -957,14 +1043,20 @@ module.exports = async function handler(req, res) {
         );
 
       box.textContent =
-        "Engine error: " +
-        error.message;
+        error.name === "AbortError"
+          ? "Engine request timed out. Retrying automatically..."
+          : "Engine error: " +
+            error.message +
+            " — retrying automatically.";
 
       box.style.display =
         "block";
     }
 
     finally {
+
+      clearTimeout(timeout);
+
       busy = false;
     }
   }
@@ -975,7 +1067,24 @@ module.exports = async function handler(req, res) {
     )
     .addEventListener(
       "change",
-      updateMonitor
+      () => {
+
+        successfulPolls = 0;
+        consecutiveErrors = 0;
+        lastSuccessTime = null;
+
+        text(
+          "pollCount",
+          0
+        );
+
+        text(
+          "errorCount",
+          0
+        );
+
+        updateMonitor();
+      }
     );
 
   updateMonitor();
@@ -983,6 +1092,11 @@ module.exports = async function handler(req, res) {
   setInterval(
     updateMonitor,
     UPDATE_INTERVAL
+  );
+
+  setInterval(
+    updateAgeDisplay,
+    1000
   );
 
 </script>
