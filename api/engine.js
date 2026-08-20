@@ -19,8 +19,10 @@ module.exports = async function handler(req, res) {
 
     // =====================================================
     // MIKEAIRCRAFT ENGINE v2
-    // Version 0.4
-    // Stage 3: Persistent state tracking
+    // Version 0.4.1
+    //
+    // Stage 3.1:
+    // Persistent state tracking + bad-target filtering
     // =====================================================
 
     const AIRPORTS = {
@@ -199,6 +201,102 @@ module.exports = async function handler(req, res) {
       }
 
       return result.result;
+    }
+
+    // =====================================================
+    // FILTER BAD / NON-AIRCRAFT TARGETS
+    // =====================================================
+
+    const rejectedCategories =
+      new Set([
+        "A7",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B6",
+        "B7",
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]);
+
+    const rejectedExact =
+      new Set([
+        "GND",
+        "TWR",
+        "EMER",
+        "GROUND",
+        "TOWER"
+      ]);
+
+    const rejectedPrefixes = [
+      "FOLLOW",
+      "POZAR",
+      "TXLU",
+      "UDRZBA",
+      "AIRPORT",
+      "GROUND",
+      "TWR",
+      "GND",
+      "EMER"
+    ];
+
+    function cleanText(value) {
+      return String(value || "")
+        .trim()
+        .toUpperCase();
+    }
+
+    function unwantedAircraft(ac) {
+
+      const flight =
+        cleanText(ac.flight);
+
+      const type =
+        cleanText(ac.t);
+
+      const registration =
+        cleanText(ac.r);
+
+      const category =
+        cleanText(ac.category);
+
+      if (
+        rejectedCategories.has(category)
+      ) {
+        return true;
+      }
+
+      if (
+        rejectedExact.has(type)
+        ||
+        rejectedExact.has(registration)
+        ||
+        rejectedExact.has(flight)
+      ) {
+        return true;
+      }
+
+      for (
+        const prefix
+        of rejectedPrefixes
+      ) {
+
+        if (
+          flight.startsWith(prefix)
+          ||
+          registration.startsWith(prefix)
+          ||
+          type.startsWith(prefix)
+        ) {
+          return true;
+        }
+      }
+
+      return false;
     }
 
     // =====================================================
@@ -498,7 +596,7 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // LOAD EXISTING ENGINE STATE
+    // LOAD EXISTING STATE
     // =====================================================
 
     const stateKey =
@@ -537,7 +635,7 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // FALLBACK IF LIVE ADS-B TEMPORARILY FAILS
+    // STALE FALLBACK
     // =====================================================
 
     if (!rawAircraft) {
@@ -578,10 +676,10 @@ module.exports = async function handler(req, res) {
             "MikeAircraft Engine v2",
 
           version:
-            "0.4",
+            "0.4.1",
 
           stage:
-            "STATE_TRACKING",
+            "FILTERED_STATE_TRACKING",
 
           error:
             "All ADS-B sources failed",
@@ -611,10 +709,10 @@ module.exports = async function handler(req, res) {
           "MikeAircraft Engine v2",
 
         version:
-          "0.4",
+          "0.4.1",
 
         stage:
-          "STATE_TRACKING",
+          "FILTERED_STATE_TRACKING",
 
         dataStatus:
           "STALE",
@@ -672,11 +770,21 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // NORMALISE AIRCRAFT
+    // FILTER + NORMALISE
     // =====================================================
 
+    const filteredRaw =
+      rawAircraft.filter(
+        ac =>
+          !unwantedAircraft(ac)
+      );
+
+    const filteredOutCount =
+      rawAircraft.length -
+      filteredRaw.length;
+
     const aircraft =
-      rawAircraft
+      filteredRaw
 
         .filter(
           ac =>
@@ -851,7 +959,7 @@ module.exports = async function handler(req, res) {
         );
 
     // =====================================================
-    // EXISTING TRACK HISTORIES
+    // TRACK HISTORIES
     // =====================================================
 
     const tracks =
@@ -883,7 +991,7 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // STATE CLASSIFIER
+    // CLASSIFIER
     // =====================================================
 
     function classify(
@@ -1003,7 +1111,7 @@ module.exports = async function handler(req, res) {
         ac.onGround;
 
       // ---------------------------------------------
-      // GROUND STATES
+      // GROUND
       // ---------------------------------------------
 
       if (ac.onGround) {
@@ -1085,7 +1193,7 @@ module.exports = async function handler(req, res) {
       }
 
       // ---------------------------------------------
-      // DEPARTURE STATES
+      // DEPARTURES
       // ---------------------------------------------
 
       if (
@@ -1128,7 +1236,7 @@ module.exports = async function handler(req, res) {
       }
 
       // ---------------------------------------------
-      // ARRIVAL STATES
+      // ARRIVALS
       // ---------------------------------------------
 
       if (
@@ -1235,7 +1343,7 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // UPDATE HISTORY + CLASSIFY
+    // UPDATE HISTORIES
     // =====================================================
 
     const classified = [];
@@ -1378,7 +1486,7 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // REMOVE OLD TRACKS
+    // CLEAN OLD TRACKS
     // =====================================================
 
     for (
@@ -1450,10 +1558,7 @@ module.exports = async function handler(req, res) {
         )
 
         .sort(
-          (
-            a,
-            b
-          ) => {
+          (a, b) => {
 
             if (
               a.state === "ON_FINAL"
@@ -1502,10 +1607,7 @@ module.exports = async function handler(req, res) {
         )
 
         .sort(
-          (
-            a,
-            b
-          ) => {
+          (a, b) => {
 
             const priority = {
               TAKEOFF_ROLL: 0,
@@ -1515,18 +1617,10 @@ module.exports = async function handler(req, res) {
             };
 
             const pa =
-              priority[
-                a.state
-              ]
-              ??
-              9;
+              priority[a.state] ?? 9;
 
             const pb =
-              priority[
-                b.state
-              ]
-              ??
-              9;
+              priority[b.state] ?? 9;
 
             if (pa !== pb) {
               return pa - pb;
@@ -1543,7 +1637,7 @@ module.exports = async function handler(req, res) {
         null;
 
     // =====================================================
-    // SAVE ENGINE STATE
+    // SAVE STATE
     // =====================================================
 
     const stateToStore = {
@@ -1598,10 +1692,10 @@ module.exports = async function handler(req, res) {
         "MikeAircraft Engine v2",
 
       version:
-        "0.4",
+        "0.4.1",
 
       stage:
-        "STATE_TRACKING",
+        "FILTERED_STATE_TRACKING",
 
       dataStatus:
         "LIVE",
@@ -1631,6 +1725,9 @@ module.exports = async function handler(req, res) {
 
         rawCount:
           rawAircraft.length,
+
+        filteredOut:
+          filteredOutCount,
 
         trackedCount:
           classified.length,
@@ -1708,7 +1805,6 @@ module.exports = async function handler(req, res) {
                 speed:
                   nextArrival.speed
               }
-
             : null,
 
         nextDeparture:
@@ -1749,7 +1845,6 @@ module.exports = async function handler(req, res) {
                 speed:
                   nextDeparture.speed
               }
-
             : null
       },
 
@@ -1773,10 +1868,10 @@ module.exports = async function handler(req, res) {
         "MikeAircraft Engine v2",
 
       version:
-        "0.4",
+        "0.4.1",
 
       stage:
-        "STATE_TRACKING",
+        "FILTERED_STATE_TRACKING",
 
       error:
         error.message
