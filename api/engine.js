@@ -18,7 +18,8 @@ module.exports = async function handler(req, res) {
   try {
     // =====================================================
     // MIKEAIRCRAFT ENGINE v2
-    // Stage 2: ADS-B ingestion + persistent aircraft memory
+    // Version 0.3
+    // Stage 2: Live ADS-B + Persistent Aircraft Memory
     // =====================================================
 
     const AIRPORTS = {
@@ -53,14 +54,14 @@ module.exports = async function handler(req, res) {
       CDG: {
         name: "Paris Charles de Gaulle",
         icao: "LFPG",
-        lat: 49.00975,
+        lat: 49.009750,
         lon: 2.562618
       },
 
       MAN: {
         name: "Manchester Airport",
         icao: "EGCC",
-        lat: 53.34715,
+        lat: 53.347150,
         lon: -2.283883
       }
     };
@@ -72,19 +73,18 @@ module.exports = async function handler(req, res) {
     const requestedCode =
       String(req.query.airport || "PRG").toUpperCase();
 
-    const airport =
-      AIRPORTS[requestedCode] || AIRPORTS.PRG;
-
     const airportCode =
       AIRPORTS[requestedCode]
         ? requestedCode
         : "PRG";
 
+    const airport =
+      AIRPORTS[airportCode];
+
     const radius = 20;
 
     // =====================================================
-    // REDIS / UPSTASH CONNECTION
-    // Credentials were created automatically by Vercel.
+    // UPSTASH REDIS CONNECTION
     // =====================================================
 
     const redisURL =
@@ -99,7 +99,7 @@ module.exports = async function handler(req, res) {
     async function redisCommand(command) {
       if (!redisAvailable) {
         throw new Error(
-          "MikeAircraft Redis environment variables are missing"
+          "MikeAircraft Redis environment variables unavailable"
         );
       }
 
@@ -119,25 +119,28 @@ module.exports = async function handler(req, res) {
       });
 
       if (!response.ok) {
+        const body =
+          await response.text();
+
         throw new Error(
-          `Redis HTTP ${response.status}`
+          `Redis HTTP ${response.status}: ${body}`
         );
       }
 
-      const data =
+      const result =
         await response.json();
 
-      if (data.error) {
+      if (result.error) {
         throw new Error(
-          `Redis: ${data.error}`
+          `Redis error: ${result.error}`
         );
       }
 
-      return data.result;
+      return result.result;
     }
 
     // =====================================================
-    // DIRECT ADS-B SOURCES
+    // ADS-B SOURCES
     // =====================================================
 
     const sources = [
@@ -197,7 +200,8 @@ module.exports = async function handler(req, res) {
         try {
           data =
             JSON.parse(text);
-        } catch {
+        }
+        catch {
           throw new Error(
             "Source returned non-JSON data"
           );
@@ -205,7 +209,7 @@ module.exports = async function handler(req, res) {
 
         if (!Array.isArray(data.ac)) {
           throw new Error(
-            "No aircraft array"
+            "No aircraft array returned"
           );
         }
 
@@ -216,8 +220,8 @@ module.exports = async function handler(req, res) {
           source.name;
 
         break;
-
-      } catch (error) {
+      }
+      catch (error) {
         sourceErrors.push({
           source:
             source.name,
@@ -258,12 +262,10 @@ module.exports = async function handler(req, res) {
     const aircraft =
       rawAircraft
 
-        .filter(ac => {
-          return (
-            Number.isFinite(Number(ac.lat)) &&
-            Number.isFinite(Number(ac.lon))
-          );
-        })
+        .filter(ac =>
+          Number.isFinite(Number(ac.lat)) &&
+          Number.isFinite(Number(ac.lon))
+        )
 
         .map(ac => {
           const id =
@@ -374,10 +376,7 @@ module.exports = async function handler(req, res) {
         .filter(ac => ac.id);
 
     // =====================================================
-    // BUILD COMPACT MEMORY SNAPSHOT
-    //
-    // We store ONE Redis record per airport, rather than
-    // one Redis command for every individual aircraft.
+    // SNAPSHOT STORAGE
     // =====================================================
 
     const memoryKey =
@@ -416,12 +415,14 @@ module.exports = async function handler(req, res) {
     };
 
     // =====================================================
-    // READ PREVIOUS SNAPSHOT
+    // READ PREVIOUS MEMORY
     // =====================================================
 
     let previousSnapshot = null;
+
     let memoryReadOK = false;
     let memoryWriteOK = false;
+
     let memoryError = null;
 
     if (redisAvailable) {
@@ -432,31 +433,23 @@ module.exports = async function handler(req, res) {
             memoryKey
           ]);
 
+        memoryReadOK =
+          true;
+
         if (stored) {
           try {
             previousSnapshot =
               JSON.parse(stored);
-
-            memoryReadOK =
-              true;
           }
           catch {
             previousSnapshot =
               null;
           }
         }
-        else {
-          // Redis worked, but this is simply the
-          // first observation for this airport.
-          memoryReadOK =
-            true;
-        }
 
         // =================================================
         // WRITE CURRENT SNAPSHOT
-        //
-        // Expire after 10 minutes. If an airport stops being
-        // used, its temporary tracking memory disappears.
+        // Keep temporary airport memory for 10 minutes.
         // =================================================
 
         await redisCommand([
@@ -469,8 +462,8 @@ module.exports = async function handler(req, res) {
 
         memoryWriteOK =
           true;
-
-      } catch (error) {
+      }
+      catch (error) {
         memoryError =
           error.message;
       }
@@ -481,7 +474,7 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // COMPARE CURRENT AIRCRAFT WITH PREVIOUS OBSERVATION
+    // BUILD PREVIOUS AIRCRAFT MAP
     // =====================================================
 
     const previousMap =
@@ -492,15 +485,19 @@ module.exports = async function handler(req, res) {
       Array.isArray(previousSnapshot.aircraft)
     ) {
       for (
-        const oldAircraft
+        const previous
         of previousSnapshot.aircraft
       ) {
         previousMap.set(
-          oldAircraft.id,
-          oldAircraft
+          previous.id,
+          previous
         );
       }
     }
+
+    // =====================================================
+    // COMPARE CURRENT VS PREVIOUS
+    // =====================================================
 
     let matchedAircraft = 0;
 
@@ -516,37 +513,43 @@ module.exports = async function handler(req, res) {
 
       matchedAircraft++;
 
-      const altitudeChange =
-        (
-          ac.altitude !== null &&
-          previous.altitude !== null
-        )
-          ? ac.altitude -
-            previous.altitude
-          : null;
+      let altitudeChange = null;
 
-      const speedChange =
-        (
-          ac.speed !== null &&
-          previous.speed !== null
-        )
-          ? ac.speed -
-            previous.speed
-          : null;
+      if (
+        ac.altitude !== null &&
+        previous.altitude !== null
+      ) {
+        altitudeChange =
+          ac.altitude -
+          previous.altitude;
+      }
+
+      let speedChange = null;
+
+      if (
+        ac.speed !== null &&
+        previous.speed !== null
+      ) {
+        speedChange =
+          ac.speed -
+          previous.speed;
+      }
 
       const groundTransition =
         previous.onGround !==
         ac.onGround;
 
-      if (
-        movementSamples.length < 8
-      ) {
+      // Only show a few samples in the diagnostic JSON.
+      if (movementSamples.length < 10) {
         movementSamples.push({
           id:
             ac.id,
 
           callsign:
             ac.callsign,
+
+          type:
+            ac.type,
 
           wasOnGround:
             previous.onGround,
@@ -573,7 +576,7 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // HOW OLD WAS THE PREVIOUS OBSERVATION?
+    // PREVIOUS SNAPSHOT AGE
     // =====================================================
 
     let previousAgeSeconds = null;
@@ -673,8 +676,8 @@ module.exports = async function handler(req, res) {
 
       aircraft
     });
-
-  } catch (error) {
+  }
+  catch (error) {
     console.error(
       "MikeAircraft Engine v2 error:",
       error
