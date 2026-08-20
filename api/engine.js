@@ -1610,19 +1610,35 @@ if (
     const nextDeparture =
       classified
 
-        .filter(
-          ac =>
-            [
-              "TAKEOFF_ROLL",
-              "AIRBORNE_DEPARTURE",
-              "DEPARTING",
-              "LINE_UP_OR_TAXI"
-            ]
-            .includes(
-              ac.state
-            )
-        )
+       .filter(
+  ac => {
 
+    const allowedState =
+      [
+        "TAKEOFF_ROLL",
+        "AIRBORNE_DEPARTURE",
+        "DEPARTING",
+        "LINE_UP_OR_TAXI"
+      ]
+      .includes(
+        ac.state
+      );
+
+    if (!allowedState) {
+      return false;
+    }
+
+    if (
+      ac.state === "DEPARTING"
+      &&
+      ac.airportDistance > 4
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+)
         .sort(
           (a, b) => {
 
