@@ -1,16 +1,16 @@
 // MikeAircraft Broadcast API
-// Version 0.4
+// Version 0.5
 //
 // Fully enriched broadcast feed.
 //
 // Combines:
-// Engine v0.6            -> movement intelligence
-// Enrichment v0.2        -> airline + friendly aircraft fallback
-// Route v0.5             -> origin / destination
-// AircraftInfo v0.1      -> detailed aircraft identity
+// Engine v0.6         -> movement intelligence
+// Enrichment v0.2     -> airline + friendly aircraft fallback
+// Route v0.5          -> origin / destination
+// ADSBDB aircraft API -> detailed aircraft identity
 //
-// Intended consumer:
-// MikeAircraft livestream graphics system
+// Aircraft lookup is now built directly into Broadcast
+// so we do NOT need a separate aircraftinfo.js endpoint.
 
 const engineHandler =
   require("./engine.js");
@@ -20,9 +20,6 @@ const enrichHandler =
 
 const routeHandler =
   require("./route.js");
-
-const aircraftInfoHandler =
-  require("./aircraftinfo.js");
 
 module.exports = async function handler(req, res) {
   res.setHeader(
@@ -97,6 +94,123 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
+    // DIRECT AIRCRAFT LOOKUP
+    // =====================================================
+
+    async function lookupAircraft(
+      registration
+    ) {
+      if (!registration) {
+        return null;
+      }
+
+      const controller =
+        new AbortController();
+
+      const timeout =
+        setTimeout(
+          () => controller.abort(),
+          7000
+        );
+
+      try {
+        const response =
+          await fetch(
+            "https://api.adsbdb.com/v0/aircraft/" +
+            encodeURIComponent(
+              registration
+            ),
+            {
+              headers: {
+                Accept:
+                  "application/json"
+              },
+
+              signal:
+                controller.signal
+            }
+          );
+
+        if (
+          response.status === 404
+        ) {
+          return null;
+        }
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const data =
+          await response.json();
+
+        const aircraft =
+          data &&
+          data.response &&
+          data.response.aircraft
+            ? data.response.aircraft
+            : null;
+
+        if (!aircraft) {
+          return null;
+        }
+
+        return {
+          registration:
+            aircraft.registration ||
+            registration,
+
+          modeS:
+            aircraft.mode_s ||
+            null,
+
+          manufacturer:
+            aircraft.manufacturer ||
+            null,
+
+          type:
+            aircraft.type ||
+            null,
+
+          icaoType:
+            aircraft.icao_type ||
+            null,
+
+          owner:
+            aircraft.registered_owner ||
+            null,
+
+          ownerCountry:
+            aircraft
+              .registered_owner_country_name ||
+            null,
+
+          operatorFlag:
+            aircraft
+              .registered_owner_operator_flag_code ||
+            null,
+
+          photo:
+            aircraft.url_photo ||
+            null,
+
+          thumbnail:
+            aircraft
+              .url_photo_thumbnail ||
+            null
+        };
+      }
+
+      catch {
+        return null;
+      }
+
+      finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    // =====================================================
     // STEP 1 — MOVEMENT ENGINE
     // =====================================================
 
@@ -165,7 +279,7 @@ module.exports = async function handler(req, res) {
       const [
         enrichResult,
         routeResult,
-        aircraftInfoResult
+        aircraftInfo
       ] =
         await Promise.all([
           invokeHandler(
@@ -204,22 +318,12 @@ module.exports = async function handler(req, res) {
               }),
 
           registration
-            ? invokeHandler(
-                aircraftInfoHandler,
-                {
-                  registration
-                }
+            ? lookupAircraft(
+                registration
               )
-              .catch(
-                () => ({
-                  status: 500,
-                  data: null
-                })
+            : Promise.resolve(
+                null
               )
-            : Promise.resolve({
-                status: 404,
-                data: null
-              })
         ]);
 
       const enrichment =
@@ -236,15 +340,6 @@ module.exports = async function handler(req, res) {
         routeResult.data.routeFound &&
         routeResult.data.route
           ? routeResult.data.route
-          : null;
-
-      const aircraftInfo =
-        aircraftInfoResult &&
-        aircraftInfoResult.data &&
-        aircraftInfoResult.data.ok &&
-        aircraftInfoResult.data.found &&
-        aircraftInfoResult.data.aircraft
-          ? aircraftInfoResult.data.aircraft
           : null;
 
       // =================================================
@@ -283,6 +378,7 @@ module.exports = async function handler(req, res) {
             null
         };
       }
+
       else if (
         enrichment &&
         enrichment.operator &&
@@ -307,6 +403,7 @@ module.exports = async function handler(req, res) {
             null
         };
       }
+
       else if (
         aircraftInfo &&
         aircraftInfo.owner
@@ -352,11 +449,6 @@ module.exports = async function handler(req, res) {
 
       // =================================================
       // AIRCRAFT IDENTITY
-      //
-      // Priority:
-      // 1. AircraftInfo database
-      // 2. Enrichment type table
-      // 3. Raw ICAO type code
       // =================================================
 
       let aircraftName =
@@ -422,6 +514,7 @@ module.exports = async function handler(req, res) {
               " " +
               aircraftInfo.type;
           }
+
           else {
             aircraftName =
               aircraftInfo.type;
@@ -497,14 +590,18 @@ module.exports = async function handler(req, res) {
           Number.isFinite(
             Number(destination.latitude)
           )
-            ? Number(destination.latitude)
+            ? Number(
+                destination.latitude
+              )
             : null;
 
         const destinationLon =
           Number.isFinite(
             Number(destination.longitude)
           )
-            ? Number(destination.longitude)
+            ? Number(
+                destination.longitude
+              )
             : null;
 
         route = {
@@ -659,8 +756,7 @@ module.exports = async function handler(req, res) {
           flight:
             flightDisplay,
 
-          registration:
-            registration,
+          registration,
 
           modeS
         },
@@ -783,6 +879,7 @@ module.exports = async function handler(req, res) {
           current.route.found
         );
     }
+
     else if (nextIn.available) {
       mode =
         "PREVIEW";
@@ -796,6 +893,7 @@ module.exports = async function handler(req, res) {
           nextIn.route.found
         );
     }
+
     else if (nextOut.available) {
       mode =
         "PREVIEW";
@@ -823,7 +921,7 @@ module.exports = async function handler(req, res) {
           "MikeAircraft Broadcast",
 
         version:
-          "0.4",
+          "0.5",
 
         generatedAt:
           new Date()
@@ -897,7 +995,7 @@ module.exports = async function handler(req, res) {
           "MikeAircraft Broadcast",
 
         version:
-          "0.4",
+          "0.5",
 
         error:
           error.message
