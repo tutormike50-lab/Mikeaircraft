@@ -238,7 +238,7 @@ module.exports = async function handler(req, res) {
   <div class="header">
     <h1>✈ MikeAircraft Engine Monitor</h1>
     <p>
-      Engine v2 • Movement + Airline + Route Enrichment
+      Engine v2 • Movement + Airline + Route + Aircraft Enrichment
     </p>
   </div>
 
@@ -247,7 +247,6 @@ module.exports = async function handler(req, res) {
     <div id="errorBox"></div>
 
     <div class="card">
-
       <div class="cardTitle">
         ENGINE STATUS
       </div>
@@ -293,11 +292,9 @@ module.exports = async function handler(req, res) {
           WAITING
         </span>
       </div>
-
     </div>
 
     <div class="card">
-
       <div class="cardTitle">
         HEARTBEAT
       </div>
@@ -324,51 +321,37 @@ module.exports = async function handler(req, res) {
 
       <div class="row">
         <span class="label">Current request</span>
-        <span id="requestState" class="value">
-          IDLE
-        </span>
+        <span id="requestState" class="value">IDLE</span>
       </div>
 
       <div class="row">
         <span class="label">Automatic retry</span>
-        <span class="value good">
-          Every 5 seconds
-        </span>
+        <span class="value good">Every 5 seconds</span>
       </div>
-
     </div>
 
     <div class="card">
-
       <div class="cardTitle">
         LIVE TRACKING
       </div>
 
       <div class="row">
-        <span class="label">
-          Aircraft currently tracked
-        </span>
+        <span class="label">Aircraft currently tracked</span>
         <span id="aircraft" class="value big">0</span>
       </div>
 
       <div class="row">
-        <span class="label">
-          Persistent aircraft histories
-        </span>
+        <span class="label">Persistent aircraft histories</span>
         <span id="histories" class="value big">0</span>
       </div>
 
       <div class="row">
-        <span class="label">
-          Filtered non-aircraft / junk targets
-        </span>
+        <span class="label">Filtered non-aircraft / junk targets</span>
         <span id="filteredOut" class="value">0</span>
       </div>
-
     </div>
 
     <div class="card">
-
       <div class="cardTitle">
         AIRCRAFT STATES
       </div>
@@ -378,7 +361,6 @@ module.exports = async function handler(req, res) {
           Waiting for state data...
         </span>
       </div>
-
     </div>
 
     <div class="selectionGrid">
@@ -405,7 +387,7 @@ module.exports = async function handler(req, res) {
           </div>
 
           <div class="targetDetail">
-            <span>Display flight</span>
+            <span>Flight</span>
             <strong id="currentFlight">---</strong>
           </div>
 
@@ -415,7 +397,7 @@ module.exports = async function handler(req, res) {
           </div>
 
           <div class="targetDetail">
-            <span>Aircraft type</span>
+            <span>Aircraft</span>
             <strong id="currentType">---</strong>
           </div>
 
@@ -479,7 +461,7 @@ module.exports = async function handler(req, res) {
           </div>
 
           <div class="targetDetail">
-            <span>Display flight</span>
+            <span>Flight</span>
             <strong id="inFlight">---</strong>
           </div>
 
@@ -489,7 +471,7 @@ module.exports = async function handler(req, res) {
           </div>
 
           <div class="targetDetail">
-            <span>Aircraft type</span>
+            <span>Aircraft</span>
             <strong id="inType">---</strong>
           </div>
 
@@ -548,7 +530,7 @@ module.exports = async function handler(req, res) {
           </div>
 
           <div class="targetDetail">
-            <span>Display flight</span>
+            <span>Flight</span>
             <strong id="outFlight">---</strong>
           </div>
 
@@ -558,7 +540,7 @@ module.exports = async function handler(req, res) {
           </div>
 
           <div class="targetDetail">
-            <span>Aircraft type</span>
+            <span>Aircraft</span>
             <strong id="outType">---</strong>
           </div>
 
@@ -598,7 +580,6 @@ module.exports = async function handler(req, res) {
     </div>
 
     <div class="card">
-
       <div class="cardTitle">
         MEMORY HEALTH
       </div>
@@ -615,15 +596,12 @@ module.exports = async function handler(req, res) {
 
       <div class="row">
         <span class="label">Memory error</span>
-        <span id="memoryError" class="value">
-          NONE
-        </span>
+        <span id="memoryError" class="value">NONE</span>
       </div>
-
     </div>
 
     <div class="footer">
-      MikeAircraft Engine v2 • Route Enrichment Monitor
+      MikeAircraft Engine v2 • Full Enrichment Monitor
     </div>
 
   </div>
@@ -642,15 +620,21 @@ module.exports = async function handler(req, res) {
   const routeCache = new Map();
 
   function text(id, value) {
-    const el = document.getElementById(id);
+    const el =
+      document.getElementById(id);
 
     if (el) {
       el.textContent = value;
     }
   }
 
-  function setStatus(id, value, good) {
-    const el = document.getElementById(id);
+  function setStatus(
+    id,
+    value,
+    good
+  ) {
+    const el =
+      document.getElementById(id);
 
     if (!el) {
       return;
@@ -669,17 +653,30 @@ module.exports = async function handler(req, res) {
       );
   }
 
-  async function enrichCallsign(callsign) {
-    const key =
+  async function enrichAircraft(
+    callsign,
+    typeCode
+  ) {
+    const call =
       String(callsign || "")
         .trim()
         .toUpperCase();
 
-    if (!key) {
+    const type =
+      String(typeCode || "")
+        .trim()
+        .toUpperCase();
+
+    if (!call && !type) {
       return null;
     }
 
-    if (enrichmentCache.has(key)) {
+    const key =
+      call + "|" + type;
+
+    if (
+      enrichmentCache.has(key)
+    ) {
       return enrichmentCache.get(key);
     }
 
@@ -687,7 +684,9 @@ module.exports = async function handler(req, res) {
       const response =
         await fetch(
           "/api/enrich?callsign=" +
-          encodeURIComponent(key),
+          encodeURIComponent(call) +
+          "&type=" +
+          encodeURIComponent(type),
           {
             cache: "no-store"
           }
@@ -716,7 +715,9 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  async function lookupRoute(callsign) {
+  async function lookupRoute(
+    callsign
+  ) {
     const key =
       String(callsign || "")
         .trim()
@@ -726,7 +727,9 @@ module.exports = async function handler(req, res) {
       return null;
     }
 
-    if (routeCache.has(key)) {
+    if (
+      routeCache.has(key)
+    ) {
       return routeCache.get(key);
     }
 
@@ -749,7 +752,8 @@ module.exports = async function handler(req, res) {
             encodeURIComponent(key),
             {
               cache: "no-store",
-              signal: controller.signal
+              signal:
+                controller.signal
             }
           );
       }
@@ -813,7 +817,10 @@ module.exports = async function handler(req, res) {
     text(prefix + "Confidence", "---");
 
     if (showScore) {
-      text(prefix + "Score", "---");
+      text(
+        prefix + "Score",
+        "---"
+      );
     }
   }
 
@@ -926,8 +933,13 @@ module.exports = async function handler(req, res) {
 
     const results =
       await Promise.all([
-        enrichCallsign(callsign),
-        lookupRoute(callsign)
+        enrichAircraft(
+          callsign,
+          target.type
+        ),
+        lookupRoute(
+          callsign
+        )
       ]);
 
     const enrichment =
@@ -949,6 +961,19 @@ module.exports = async function handler(req, res) {
       return;
     }
 
+    // Friendly aircraft name
+    if (
+      enrichment &&
+      enrichment.aircraft &&
+      enrichment.aircraft.name
+    ) {
+      text(
+        prefix + "Type",
+        enrichment.aircraft.name
+      );
+    }
+
+    // Operator
     if (
       route &&
       route.airline &&
@@ -976,6 +1001,7 @@ module.exports = async function handler(req, res) {
       );
     }
 
+    // Route and public flight identifier
     if (
       route &&
       route.origin &&
@@ -1026,7 +1052,9 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  function showStates(stateCounts) {
+  function showStates(
+    stateCounts
+  ) {
     const container =
       document.getElementById(
         "stateList"
@@ -1160,12 +1188,15 @@ module.exports = async function handler(req, res) {
       const response =
         await fetch(
           "/api/engine?airport=" +
-          encodeURIComponent(airport) +
+          encodeURIComponent(
+            airport
+          ) +
           "&t=" +
           Date.now(),
           {
             cache: "no-store",
-            signal: controller.signal
+            signal:
+              controller.signal
           }
         );
 
@@ -1196,7 +1227,8 @@ module.exports = async function handler(req, res) {
 
       successfulPolls++;
       consecutiveErrors = 0;
-      lastSuccessTime = Date.now();
+      lastSuccessTime =
+        Date.now();
 
       text(
         "pollCount",
