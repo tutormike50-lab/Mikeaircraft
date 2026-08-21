@@ -1,9 +1,17 @@
 // MikeAircraft Livestream Overlay
-// Version 0.4
+// Version 0.5
 //
-// Adds real live radar to Overlay v0.3.
-// Radar uses live aircraft positions from Engine v0.6.
-// No additional Vercel function required.
+// Features:
+// - CURRENT lower third
+// - NEXT aircraft
+// - animated aircraft profile
+// - genuine live radar
+// - animated route-map card
+//
+// Uses:
+// Broadcast API v0.5
+// Engine v0.6
+// Aircraft Graphic API
 
 module.exports = async function handler(req, res) {
   res.setHeader(
@@ -22,817 +30,872 @@ module.exports = async function handler(req, res) {
 
 <head>
 
-  <meta charset="UTF-8">
-
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
-
-  <title>MikeAircraft Overlay v0.4</title>
-
-  <style>
-
-    * {
-      box-sizing: border-box;
-    }
-
-    html,
-    body {
-      margin: 0;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-
-      font-family:
-        Arial,
-        Helvetica,
-        sans-serif;
-    }
-
-    body {
-      background: #202020;
-    }
-
-    .overlay {
-      position: relative;
-      width: 100vw;
-      height: 100vh;
-    }
-
-    /* ==================================================
-       LIVE RADAR
-       ================================================== */
-
-    .radar-wrap {
-      position: absolute;
-
-      top: 3.5vh;
-      right: 3vw;
-
-      width:
-        clamp(
-          230px,
-          18vw,
-          355px
-        );
-
-      aspect-ratio: 1 / 1;
-
-      border-radius: 50%;
-
-      background:
-        radial-gradient(
-          circle,
-          rgba(4, 30, 37, 0.88) 0%,
-          rgba(2, 18, 25, 0.94) 72%,
-          rgba(1, 10, 16, 0.97) 100%
-        );
-
-      border:
-        2px solid
-        rgba(
-          79,
-          229,
-          188,
-          0.62
-        );
-
-      box-shadow:
-        0 0 28px
-        rgba(
-          49,
-          221,
-          174,
-          0.17
-        ),
-        inset 0 0 28px
-        rgba(
-          49,
-          221,
-          174,
-          0.08
-        );
-
-      overflow: hidden;
-    }
-
-    #radarCanvas {
-      position: absolute;
-      inset: 0;
-
-      width: 100%;
-      height: 100%;
-    }
+<meta charset="UTF-8">
 
-    .radar-title {
-      position: absolute;
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+>
 
-      top: 10px;
-      left: 50%;
+<title>MikeAircraft Overlay v0.5</title>
 
-      transform:
-        translateX(-50%);
+<style>
 
-      color:
-        rgba(
-          169,
-          255,
-          226,
-          0.92
-        );
+* {
+  box-sizing: border-box;
+}
 
-      font-size:
-        clamp(
-          9px,
-          0.65vw,
-          12px
-        );
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
 
-      font-weight: 800;
+  font-family:
+    Arial,
+    Helvetica,
+    sans-serif;
+}
 
-      letter-spacing: 1.4px;
+body {
+  background: #202020;
+}
 
-      z-index: 4;
+.overlay {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+}
 
-      pointer-events: none;
-    }
+/* =====================================================
+   DEVELOPMENT BADGE
+   ===================================================== */
 
-    .radar-range {
-      position: absolute;
+.dev-badge {
+  position: absolute;
 
-      bottom: 10px;
-      left: 50%;
+  top: 18px;
+  left: 50%;
 
-      transform:
-        translateX(-50%);
+  transform:
+    translateX(-50%);
 
-      color:
-        rgba(
-          139,
-          220,
-          197,
-          0.72
-        );
+  z-index: 20;
 
-      font-size:
-        clamp(
-          8px,
-          0.55vw,
-          10px
-        );
+  padding:
+    7px 11px;
 
-      letter-spacing: 0.8px;
+  border-radius: 7px;
 
-      z-index: 4;
+  background:
+    rgba(0,0,0,0.55);
 
-      pointer-events: none;
-    }
+  color:
+    #9ed8f5;
 
-    /* ==================================================
-       AIRCRAFT PROFILE
-       ================================================== */
+  font-size: 12px;
 
-    .aircraft-profile-wrap {
-      position: absolute;
+  font-weight: bold;
+}
 
-      left: 5.5vw;
-      bottom:
-        calc(
-          5vh + 176px
-        );
+/* =====================================================
+   ROUTE MAP
+   ===================================================== */
 
-      width:
-        min(
-          36vw,
-          650px
-        );
+.route-map-card {
+  position: absolute;
 
-      height: 220px;
+  top: 3.5vh;
+  left: 3vw;
 
-      overflow: hidden;
+  width:
+    clamp(
+      290px,
+      24vw,
+      455px
+    );
 
-      pointer-events: none;
-    }
+  height:
+    clamp(
+      175px,
+      15vw,
+      285px
+    );
 
-    .aircraft-profile {
-      position: absolute;
-
-      left: 0;
-      bottom: -175px;
-
-      width: 100%;
-      height: auto;
+  overflow: hidden;
 
-      opacity: 0;
+  border-radius: 15px;
 
-      transition:
-        bottom 0.65s
-        cubic-bezier(
-          0.22,
-          0.82,
-          0.25,
-          1
-        ),
-        opacity 0.35s ease;
-    }
+  border:
+    1px solid
+    rgba(
+      98,
+      197,
+      255,
+      0.45
+    );
 
-    .aircraft-profile.rise {
-      bottom: -28px;
-      opacity: 1;
-    }
+  background:
+    linear-gradient(
+      145deg,
+      rgba(5,26,46,0.96),
+      rgba(8,53,82,0.94)
+    );
 
-    .aircraft-profile.settle {
-      bottom: -110px;
-      opacity: 0.92;
-    }
+  box-shadow:
+    0 14px 36px
+    rgba(0,0,0,0.35);
 
-    /* ==================================================
-       LOWER THIRD
-       ================================================== */
+  opacity: 0;
 
-    .lower-third {
-      position: absolute;
+  transform:
+    translateY(-20px)
+    scale(0.97);
 
-      left: 4vw;
-      right: 28vw;
-      bottom: 5vh;
+  transition:
+    opacity 0.5s ease,
+    transform 0.5s ease;
 
-      opacity: 0;
+  pointer-events: none;
+}
 
-      transform:
-        translateY(28px);
+.route-map-card.visible {
+  opacity: 1;
 
-      transition:
-        opacity 0.4s ease,
-        transform 0.4s ease;
-    }
+  transform:
+    translateY(0)
+    scale(1);
+}
 
-    .lower-third.visible {
-      opacity: 1;
+.route-map-title {
+  position: absolute;
 
-      transform:
-        translateY(0);
-    }
+  top: 12px;
+  left: 16px;
 
-    .main-ribbon {
-      position: relative;
+  z-index: 4;
 
-      display: grid;
+  color:
+    #9edcf7;
 
-      grid-template-columns:
-        minmax(0, 1.7fr)
-        minmax(220px, 0.8fr);
+  font-size:
+    clamp(
+      9px,
+      0.7vw,
+      12px
+    );
+
+  font-weight: 800;
+
+  letter-spacing: 1.4px;
+}
+
+.route-map-route {
+  position: absolute;
+
+  top: 30px;
+  left: 16px;
+
+  z-index: 4;
+
+  color:
+    white;
+
+  font-size:
+    clamp(
+      20px,
+      1.8vw,
+      31px
+    );
+
+  font-weight: 800;
+}
+
+.route-map-cities {
+  position: absolute;
+
+  bottom: 11px;
+  left: 16px;
+  right: 16px;
+
+  z-index: 4;
+
+  color:
+    #a9c7d9;
+
+  font-size:
+    clamp(
+      9px,
+      0.75vw,
+      12px
+    );
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#routeCanvas {
+  position: absolute;
+  inset: 0;
+
+  width: 100%;
+  height: 100%;
+}
+
+/* =====================================================
+   RADAR
+   ===================================================== */
+
+.radar-wrap {
+  position: absolute;
+
+  top: 3.5vh;
+  right: 3vw;
+
+  width:
+    clamp(
+      230px,
+      18vw,
+      355px
+    );
+
+  aspect-ratio:
+    1 / 1;
+
+  border-radius: 50%;
+
+  background:
+    radial-gradient(
+      circle,
+      rgba(4,30,37,0.88) 0%,
+      rgba(2,18,25,0.94) 72%,
+      rgba(1,10,16,0.97) 100%
+    );
+
+  border:
+    2px solid
+    rgba(
+      79,
+      229,
+      188,
+      0.62
+    );
 
-      min-height: 145px;
+  box-shadow:
+    0 0 28px
+    rgba(49,221,174,0.17),
+    inset 0 0 28px
+    rgba(49,221,174,0.08);
 
-      overflow: hidden;
+  overflow: hidden;
+}
 
-      border-radius:
-        12px 12px 0 0;
+#radarCanvas {
+  position: absolute;
+  inset: 0;
 
-      background:
-        linear-gradient(
-          105deg,
-          rgba(4, 28, 53, 0.98),
-          rgba(0, 83, 138, 0.97),
-          rgba(5, 30, 53, 0.98)
-        );
+  width: 100%;
+  height: 100%;
+}
 
-      border:
-        1px solid
-        rgba(
-          100,
-          197,
-          255,
-          0.42
-        );
+.radar-title {
+  position: absolute;
 
-      box-shadow:
-        0 15px 35px
-        rgba(
-          0,
-          0,
-          0,
-          0.38
-        );
-    }
+  top: 10px;
+  left: 50%;
 
-    .main-ribbon::before {
-      content: "";
+  transform:
+    translateX(-50%);
 
-      position: absolute;
+  color:
+    rgba(
+      169,
+      255,
+      226,
+      0.92
+    );
 
-      left: 0;
-      top: 0;
-      bottom: 0;
+  font-size:
+    clamp(
+      9px,
+      0.65vw,
+      12px
+    );
 
-      width: 7px;
+  font-weight: 800;
 
-      background:
-        linear-gradient(
-          #5ee2ff,
-          #2388c3
-        );
-    }
+  letter-spacing: 1.4px;
 
-    .identity {
-      position: relative;
+  z-index: 4;
+}
 
-      padding:
-        20px 26px 18px 30px;
-    }
+.radar-range {
+  position: absolute;
 
-    .airline {
-      color: #c4e4f6;
+  bottom: 10px;
+  left: 50%;
 
-      font-size:
-        clamp(
-          16px,
-          1.25vw,
-          22px
-        );
+  transform:
+    translateX(-50%);
 
-      font-weight: 700;
+  color:
+    rgba(
+      139,
+      220,
+      197,
+      0.72
+    );
 
-      margin-bottom: 4px;
-    }
+  font-size:
+    clamp(
+      8px,
+      0.55vw,
+      10px
+    );
 
-    .flight-row {
-      display: flex;
+  letter-spacing: 0.8px;
 
-      align-items: baseline;
+  z-index: 4;
+}
 
-      flex-wrap: wrap;
+/* =====================================================
+   AIRCRAFT PROFILE
+   ===================================================== */
 
-      gap: 14px;
-    }
+.aircraft-profile-wrap {
+  position: absolute;
 
-    .flight {
-      color: #ffffff;
+  left: 5.5vw;
 
-      font-size:
-        clamp(
-          34px,
-          3vw,
-          52px
-        );
+  bottom:
+    calc(
+      5vh + 176px
+    );
 
-      font-weight: 800;
+  width:
+    min(
+      36vw,
+      650px
+    );
 
-      line-height: 1;
+  height: 220px;
 
-      letter-spacing: -1px;
-    }
+  overflow: hidden;
 
-    .route {
-      color: #61dcff;
+  pointer-events: none;
+}
 
-      font-size:
-        clamp(
-          22px,
-          2vw,
-          33px
-        );
+.aircraft-profile {
+  position: absolute;
 
-      font-weight: 800;
-    }
+  left: 0;
 
-    .aircraft-line {
-      margin-top: 12px;
+  bottom:
+    -175px;
 
-      font-size:
-        clamp(
-          15px,
-          1.15vw,
-          20px
-        );
+  width: 100%;
 
-      color: #ffffff;
+  height: auto;
 
-      font-weight: 700;
-    }
+  opacity: 0;
 
-    .registration {
-      color: #bed2df;
+  transition:
+    bottom 0.65s
+    cubic-bezier(
+      0.22,
+      0.82,
+      0.25,
+      1
+    ),
+    opacity 0.35s ease;
+}
 
-      margin-left: 10px;
+.aircraft-profile.rise {
+  bottom: -28px;
 
-      font-weight: 500;
-    }
+  opacity: 1;
+}
 
-    /* ==================================================
-       STATUS PANEL
-       ================================================== */
+.aircraft-profile.settle {
+  bottom: -110px;
 
-    .status-panel {
-      padding:
-        20px 24px 18px 18px;
+  opacity: 0.92;
+}
 
-      display: flex;
+/* =====================================================
+   LOWER THIRD
+   ===================================================== */
 
-      flex-direction: column;
+.lower-third {
+  position: absolute;
 
-      align-items: flex-end;
+  left: 4vw;
+  right: 28vw;
+  bottom: 5vh;
 
-      justify-content: center;
+  opacity: 0;
 
-      text-align: right;
-    }
+  transform:
+    translateY(28px);
 
-    .status {
-      display: inline-block;
+  transition:
+    opacity 0.4s ease,
+    transform 0.4s ease;
+}
 
-      padding:
-        7px 13px;
+.lower-third.visible {
+  opacity: 1;
 
-      border-radius: 18px;
+  transform:
+    translateY(0);
+}
 
-      color: #6cf0ad;
+.main-ribbon {
+  position: relative;
 
-      background:
-        rgba(
-          69,
-          227,
-          154,
-          0.13
-        );
+  display: grid;
 
-      border:
-        1px solid
-        rgba(
-          97,
-          236,
-          171,
-          0.48
-        );
+  grid-template-columns:
+    minmax(0,1.7fr)
+    minmax(220px,0.8fr);
 
-      font-size:
-        clamp(
-          13px,
-          1vw,
-          17px
-        );
+  min-height: 145px;
 
-      font-weight: 800;
+  overflow: hidden;
 
-      letter-spacing: 0.5px;
+  border-radius:
+    12px 12px 0 0;
 
-      margin-bottom: 11px;
-    }
+  background:
+    linear-gradient(
+      105deg,
+      rgba(4,28,53,0.98),
+      rgba(0,83,138,0.97),
+      rgba(5,30,53,0.98)
+    );
 
-    .runway-text {
-      color: #d3e9f6;
+  border:
+    1px solid
+    rgba(
+      100,
+      197,
+      255,
+      0.42
+    );
 
-      font-size:
-        clamp(
-          13px,
-          1vw,
-          17px
-        );
-    }
+  box-shadow:
+    0 15px 35px
+    rgba(0,0,0,0.38);
+}
 
-    /* ==================================================
-       TELEMETRY
-       ================================================== */
+.main-ribbon::before {
+  content: "";
 
-    .telemetry-strip {
-      display: grid;
+  position: absolute;
 
-      grid-template-columns:
-        repeat(4, 1fr);
+  left: 0;
+  top: 0;
+  bottom: 0;
 
-      min-height: 52px;
+  width: 7px;
 
-      background:
-        rgba(
-          6,
-          18,
-          31,
-          0.97
-        );
+  background:
+    linear-gradient(
+      #5ee2ff,
+      #2388c3
+    );
+}
 
-      border:
-        1px solid
-        rgba(
-          100,
-          197,
-          255,
-          0.25
-        );
+.identity {
+  position: relative;
 
-      border-top: none;
+  padding:
+    20px 26px 18px 30px;
+}
 
-      border-radius:
-        0 0 12px 12px;
+.airline {
+  color: #c4e4f6;
 
-      overflow: hidden;
+  font-size:
+    clamp(
+      16px,
+      1.25vw,
+      22px
+    );
 
-      box-shadow:
-        0 10px 24px
-        rgba(
-          0,
-          0,
-          0,
-          0.25
-        );
-    }
+  font-weight: 700;
 
-    .metric {
-      display: flex;
+  margin-bottom: 4px;
+}
 
-      justify-content: center;
+.flight-row {
+  display: flex;
 
-      align-items: center;
+  align-items: baseline;
 
-      gap: 8px;
+  flex-wrap: wrap;
 
-      border-right:
-        1px solid
-        rgba(
-          255,
-          255,
-          255,
-          0.09
-        );
+  gap: 14px;
+}
 
-      padding:
-        10px 8px;
-    }
+.flight {
+  color: white;
 
-    .metric:last-child {
-      border-right: none;
-    }
+  font-size:
+    clamp(
+      34px,
+      3vw,
+      52px
+    );
 
-    .metric-label {
-      color: #7f9db2;
+  font-weight: 800;
 
-      font-size:
-        clamp(
-          10px,
-          0.75vw,
-          12px
-        );
+  line-height: 1;
 
-      text-transform: uppercase;
+  letter-spacing: -1px;
+}
 
-      letter-spacing: 0.6px;
-    }
+.route {
+  color: #61dcff;
 
-    .metric-value {
-      color: white;
+  font-size:
+    clamp(
+      22px,
+      2vw,
+      33px
+    );
 
-      font-size:
-        clamp(
-          13px,
-          1vw,
-          17px
-        );
+  font-weight: 800;
+}
 
-      font-weight: 800;
-    }
+.aircraft-line {
+  margin-top: 12px;
 
-    /* ==================================================
-       NEXT BOX
-       ================================================== */
+  font-size:
+    clamp(
+      15px,
+      1.15vw,
+      20px
+    );
 
-    .next-box {
-      position: absolute;
+  color: white;
 
-      right: 4vw;
-      bottom: 5vh;
+  font-weight: 700;
+}
 
-      width: 21vw;
-      min-width: 290px;
-      max-width: 430px;
+.registration {
+  color: #bed2df;
 
-      opacity: 0;
+  margin-left: 10px;
 
-      transform:
-        translateY(24px);
+  font-weight: 500;
+}
 
-      transition:
-        opacity 0.4s ease,
-        transform 0.4s ease;
-    }
+/* =====================================================
+   STATUS
+   ===================================================== */
 
-    .next-box.visible {
-      opacity: 1;
+.status-panel {
+  padding:
+    20px 24px 18px 18px;
 
-      transform:
-        translateY(0);
-    }
+  display: flex;
 
-    .next-header {
-      padding:
-        9px 13px;
+  flex-direction: column;
 
-      border-radius:
-        10px 10px 0 0;
+  align-items: flex-end;
 
-      background:
-        rgba(
-          5,
-          18,
-          31,
-          0.97
-        );
+  justify-content: center;
 
-      border:
-        1px solid
-        rgba(
-          100,
-          197,
-          255,
-          0.26
-        );
+  text-align: right;
+}
 
-      border-bottom: none;
+.status {
+  display: inline-block;
 
-      color: #9dcfe9;
+  padding:
+    7px 13px;
 
-      font-size: 12px;
+  border-radius: 18px;
 
-      font-weight: 800;
+  color: #6cf0ad;
 
-      letter-spacing: 1px;
-    }
+  background:
+    rgba(
+      69,
+      227,
+      154,
+      0.13
+    );
 
-    .next-body {
-      padding:
-        13px 15px 15px;
+  border:
+    1px solid
+    rgba(
+      97,
+      236,
+      171,
+      0.48
+    );
 
-      border-radius:
-        0 0 10px 10px;
+  font-size:
+    clamp(
+      13px,
+      1vw,
+      17px
+    );
 
-      background:
-        linear-gradient(
-          110deg,
-          rgba(12, 29, 45, 0.97),
-          rgba(18, 53, 78, 0.97)
-        );
+  font-weight: 800;
 
-      border:
-        1px solid
-        rgba(
-          100,
-          197,
-          255,
-          0.28
-        );
+  margin-bottom: 11px;
+}
 
-      box-shadow:
-        0 10px 25px
-        rgba(
-          0,
-          0,
-          0,
-          0.28
-        );
-    }
+.runway-text {
+  color: #d3e9f6;
 
-    .next-flight {
-      color: #ffbd59;
+  font-size:
+    clamp(
+      13px,
+      1vw,
+      17px
+    );
+}
 
-      font-size:
-        clamp(
-          22px,
-          1.8vw,
-          30px
-        );
+/* =====================================================
+   TELEMETRY
+   ===================================================== */
 
-      font-weight: 800;
+.telemetry-strip {
+  display: grid;
 
-      margin-bottom: 2px;
-    }
+  grid-template-columns:
+    repeat(4,1fr);
 
-    .next-airline {
-      color: #d3e1ea;
+  min-height: 52px;
 
-      font-size:
-        clamp(
-          12px,
-          0.95vw,
-          15px
-        );
+  background:
+    rgba(
+      6,
+      18,
+      31,
+      0.97
+    );
 
-      font-weight: 700;
-    }
+  border:
+    1px solid
+    rgba(
+      100,
+      197,
+      255,
+      0.25
+    );
 
-    .next-route {
-      color: #75dfff;
+  border-top: none;
 
-      font-size:
-        clamp(
-          14px,
-          1.1vw,
-          18px
-        );
+  border-radius:
+    0 0 12px 12px;
 
-      font-weight: 800;
+  overflow: hidden;
+}
 
-      margin-top: 5px;
-    }
+.metric {
+  display: flex;
 
-    .next-aircraft {
-      color: #aebfcb;
+  justify-content: center;
 
-      font-size:
-        clamp(
-          11px,
-          0.85vw,
-          14px
-        );
+  align-items: center;
 
-      margin-top: 7px;
-    }
+  gap: 8px;
 
-    /* ==================================================
-       DEV BADGE
-       ================================================== */
+  border-right:
+    1px solid
+    rgba(
+      255,
+      255,
+      255,
+      0.09
+    );
 
-    .dev-badge {
-      position: absolute;
+  padding:
+    10px 8px;
+}
 
-      top: 18px;
-      left: 20px;
+.metric:last-child {
+  border-right: none;
+}
 
-      padding:
-        7px 10px;
+.metric-label {
+  color: #7f9db2;
 
-      border-radius: 7px;
+  font-size:
+    clamp(
+      10px,
+      0.75vw,
+      12px
+    );
 
-      background:
-        rgba(
-          0,
-          0,
-          0,
-          0.55
-        );
+  text-transform: uppercase;
+}
 
-      color: #9ed8f5;
+.metric-value {
+  color: white;
 
-      font-size: 12px;
+  font-size:
+    clamp(
+      13px,
+      1vw,
+      17px
+    );
 
-      font-weight: bold;
-    }
+  font-weight: 800;
+}
 
-    @media (
-      max-width: 900px
-    ) {
+/* =====================================================
+   NEXT
+   ===================================================== */
 
-      .radar-wrap {
-        width: 210px;
-        top: 16px;
-        right: 16px;
-      }
+.next-box {
+  position: absolute;
 
-      .aircraft-profile-wrap {
-        left: 5vw;
-        width: 70vw;
+  right: 4vw;
+  bottom: 5vh;
 
-        bottom:
-          calc(
-            20vh + 145px
-          );
-      }
+  width: 21vw;
 
-      .lower-third {
-        left: 3vw;
-        right: 3vw;
-        bottom: 20vh;
-      }
+  min-width: 290px;
 
-      .main-ribbon {
-        grid-template-columns:
-          1fr;
-      }
+  max-width: 430px;
 
-      .status-panel {
-        align-items:
-          flex-start;
+  opacity: 0;
 
-        text-align:
-          left;
-      }
+  transform:
+    translateY(24px);
 
-      .telemetry-strip {
-        grid-template-columns:
-          repeat(2, 1fr);
-      }
+  transition:
+    opacity 0.4s ease,
+    transform 0.4s ease;
+}
 
-      .next-box {
-        left: 3vw;
-        right: 3vw;
-        bottom: 3vh;
+.next-box.visible {
+  opacity: 1;
 
-        width: auto;
-        max-width: none;
-      }
+  transform:
+    translateY(0);
+}
 
-    }
+.next-header {
+  padding:
+    9px 13px;
 
-  </style>
+  border-radius:
+    10px 10px 0 0;
+
+  background:
+    rgba(
+      5,
+      18,
+      31,
+      0.97
+    );
+
+  border:
+    1px solid
+    rgba(
+      100,
+      197,
+      255,
+      0.26
+    );
+
+  border-bottom: none;
+
+  color: #9dcfe9;
+
+  font-size: 12px;
+
+  font-weight: 800;
+}
+
+.next-body {
+  padding:
+    13px 15px 15px;
+
+  border-radius:
+    0 0 10px 10px;
+
+  background:
+    linear-gradient(
+      110deg,
+      rgba(12,29,45,0.97),
+      rgba(18,53,78,0.97)
+    );
+
+  border:
+    1px solid
+    rgba(
+      100,
+      197,
+      255,
+      0.28
+    );
+}
+
+.next-flight {
+  color: #ffbd59;
+
+  font-size:
+    clamp(
+      22px,
+      1.8vw,
+      30px
+    );
+
+  font-weight: 800;
+}
+
+.next-airline {
+  color: #d3e1ea;
+
+  font-size:
+    clamp(
+      12px,
+      0.95vw,
+      15px
+    );
+
+  font-weight: 700;
+}
+
+.next-route {
+  color: #75dfff;
+
+  font-size:
+    clamp(
+      14px,
+      1.1vw,
+      18px
+    );
+
+  font-weight: 800;
+
+  margin-top: 5px;
+}
+
+.next-aircraft {
+  color: #aebfcb;
+
+  font-size:
+    clamp(
+      11px,
+      0.85vw,
+      14px
+    );
+
+  margin-top: 7px;
+}
+
+</style>
 
 </head>
 
@@ -840,32 +903,58 @@ module.exports = async function handler(req, res) {
 
 <div class="overlay">
 
-
   <div class="dev-badge">
-    MikeAircraft Overlay v0.4 • LIVE RADAR
+    MikeAircraft Overlay v0.5
   </div>
 
 
-  <!-- LIVE RADAR -->
+  <!-- ROUTE MAP -->
 
   <div
-    class="radar-wrap"
+    id="routeMapCard"
+    class="route-map-card"
   >
+
+    <canvas
+      id="routeCanvas"
+    ></canvas>
+
+    <div
+      class="route-map-title"
+    >
+      FLIGHT ROUTE
+    </div>
+
+    <div
+      id="routeMapRoute"
+      class="route-map-route"
+    >
+      ---
+    </div>
+
+    <div
+      id="routeMapCities"
+      class="route-map-cities"
+    >
+      ---
+    </div>
+
+  </div>
+
+
+  <!-- RADAR -->
+
+  <div class="radar-wrap">
 
     <canvas
       id="radarCanvas"
     ></canvas>
 
-    <div
-      class="radar-title"
-    >
+    <div class="radar-title">
       LIVE RADAR
     </div>
 
-    <div
-      id="radarRange"
-      class="radar-range"
-    >
+    <div class="radar-range">
       20 KM
     </div>
 
@@ -896,7 +985,6 @@ module.exports = async function handler(req, res) {
 
     <div class="main-ribbon">
 
-
       <div class="identity">
 
         <div
@@ -905,7 +993,6 @@ module.exports = async function handler(req, res) {
         >
           ---
         </div>
-
 
         <div class="flight-row">
 
@@ -924,7 +1011,6 @@ module.exports = async function handler(req, res) {
           </div>
 
         </div>
-
 
         <div class="aircraft-line">
 
@@ -962,12 +1048,10 @@ module.exports = async function handler(req, res) {
 
       </div>
 
-
     </div>
 
 
     <div class="telemetry-strip">
-
 
       <div class="metric">
 
@@ -1032,7 +1116,6 @@ module.exports = async function handler(req, res) {
 
       </div>
 
-
     </div>
 
   </div>
@@ -1083,1338 +1166,1948 @@ module.exports = async function handler(req, res) {
 
   </div>
 
-
 </div>
 
 
 <script>
 
-  const UPDATE_INTERVAL =
-    5000;
+const UPDATE_INTERVAL =
+  5000;
 
-  const RADAR_RANGE_KM =
-    20;
-
-
-  let busy =
-    false;
-
-  let lastCurrentKey =
-    null;
-
-  let profileTimer1 =
-    null;
-
-  let profileTimer2 =
-    null;
+const RADAR_RANGE_KM =
+  20;
 
 
-  let radarAircraft =
-    [];
+let busy =
+  false;
 
-  let radarAirport =
-    null;
+let lastCurrentKey =
+  null;
 
-  let radarCurrentKey =
-    null;
+let radarCurrentKey =
+  null;
 
-  let radarSweepAngle =
-    0;
+let radarAircraft =
+  [];
+
+let radarAirport =
+  null;
+
+let radarSweepAngle =
+  0;
 
 
-  /* ==================================================
-     BASIC HELPERS
-     ================================================== */
+let profileTimer1 =
+  null;
+
+let profileTimer2 =
+  null;
 
 
-  function setText(
-    id,
-    value
-  ) {
+let routeTimer =
+  null;
 
-    const el =
-      document.getElementById(
-        id
-      );
+let routeAnimationStart =
+  0;
 
-    if (el) {
-      el.textContent =
-        value;
-    }
+let routeAnimationActive =
+  false;
 
+let routeData =
+  null;
+
+
+/* =====================================================
+   HELPERS
+   ===================================================== */
+
+function setText(
+  id,
+  value
+) {
+
+  const element =
+    document.getElementById(
+      id
+    );
+
+  if (element) {
+    element.textContent =
+      value;
+  }
+
+}
+
+
+function identityKey(
+  target
+) {
+
+  return (
+    target?.identity
+      ?.registration
+    ||
+    target?.identity
+      ?.callsign
+    ||
+    null
+  );
+
+}
+
+
+/* =====================================================
+   AIRCRAFT PROFILE
+   ===================================================== */
+
+function animateAircraftProfile(
+  target
+) {
+
+  const type =
+    target?.aircraft
+      ?.typeCode;
+
+  if (!type) {
+    return;
   }
 
 
-  function currentIdentityKey(
-    target
-  ) {
+  const direction =
+    target.movement?.lineage ===
+    "DEPARTURE"
+      ? "LEFT"
+      : "RIGHT";
 
-    if (!target) {
-      return null;
-    }
 
-    return (
-      target.identity
-        ?.registration
-      ||
-      target.identity
-        ?.callsign
-      ||
-      null
+  const profile =
+    document.getElementById(
+      "aircraftProfile"
     );
 
+
+  clearTimeout(
+    profileTimer1
+  );
+
+  clearTimeout(
+    profileTimer2
+  );
+
+
+  profile.classList.remove(
+    "rise",
+    "settle"
+  );
+
+
+  profile.src =
+    "/api/aircraft-graphic?type=" +
+    encodeURIComponent(
+      type
+    )
+    +
+    "&direction=" +
+    direction
+    +
+    "&t=" +
+    Date.now();
+
+
+  void profile.offsetWidth;
+
+
+  profile.classList.add(
+    "rise"
+  );
+
+
+  profileTimer1 =
+    setTimeout(
+      () => {
+
+        profile.classList.remove(
+          "rise"
+        );
+
+        profile.classList.add(
+          "settle"
+        );
+
+      },
+      3600
+    );
+
+
+  profileTimer2 =
+    setTimeout(
+      () => {
+
+        profile.classList.remove(
+          "settle"
+        );
+
+      },
+      7200
+    );
+
+}
+
+
+/* =====================================================
+   ROUTE MAP
+   ===================================================== */
+
+function mapProjection(
+  lat,
+  lon,
+  width,
+  height
+) {
+
+  const x =
+    (
+      lon + 180
+    )
+    /
+    360
+    *
+    width;
+
+
+  const y =
+    (
+      90 - lat
+    )
+    /
+    180
+    *
+    height;
+
+
+  return {
+    x,
+    y
+  };
+
+}
+
+
+function showRouteMap(
+  target
+) {
+
+  if (
+    !target?.route?.found
+    ||
+    !target.route.map
+  ) {
+    return;
   }
 
 
-  /* ==================================================
-     AIRCRAFT PROFILE ANIMATION
-     ================================================== */
+  const start =
+    target.route.map.start;
+
+  const end =
+    target.route.map.end;
 
 
-  function animateAircraftProfile(
-    target
+  if (
+    start?.lat == null
+    ||
+    start?.lon == null
+    ||
+    end?.lat == null
+    ||
+    end?.lon == null
   ) {
-
-    if (
-      !target ||
-      !target.available
-    ) {
-      return;
-    }
-
-
-    const typeCode =
-      target.aircraft?.typeCode ||
-      "";
-
-
-    if (!typeCode) {
-      return;
-    }
-
-
-    const lineage =
-      target.movement?.lineage;
-
-
-    const direction =
-      lineage === "ARRIVAL"
-        ? "RIGHT"
-        : lineage === "DEPARTURE"
-          ? "LEFT"
-          : "RIGHT";
-
-
-    const profile =
-      document.getElementById(
-        "aircraftProfile"
-      );
-
-
-    clearTimeout(
-      profileTimer1
-    );
-
-    clearTimeout(
-      profileTimer2
-    );
-
-
-    profile.classList.remove(
-      "rise",
-      "settle"
-    );
-
-
-    profile.src =
-      "/api/aircraft-graphic?type=" +
-      encodeURIComponent(
-        typeCode
-      )
-      +
-      "&direction=" +
-      encodeURIComponent(
-        direction
-      )
-      +
-      "&t=" +
-      Date.now();
-
-
-    void profile.offsetWidth;
-
-
-    profile.classList.add(
-      "rise"
-    );
-
-
-    profileTimer1 =
-      setTimeout(
-        () => {
-
-          profile.classList.remove(
-            "rise"
-          );
-
-          profile.classList.add(
-            "settle"
-          );
-
-        },
-        3600
-      );
-
-
-    profileTimer2 =
-      setTimeout(
-        () => {
-
-          profile.classList.remove(
-            "settle"
-          );
-
-        },
-        7200
-      );
-
+    return;
   }
 
 
-  /* ==================================================
-     CURRENT LOWER THIRD
-     ================================================== */
+  routeData = {
+    start,
+    end
+  };
 
 
-  function showMain(
-    target
+  setText(
+    "routeMapRoute",
+    target.route.display ||
+    ""
+  );
+
+
+  const originCity =
+    target.route.origin?.city
+    ||
+    target.route.origin?.name
+    ||
+    "";
+
+
+  const destinationCity =
+    target.route.destination?.city
+    ||
+    target.route.destination?.name
+    ||
+    "";
+
+
+  setText(
+    "routeMapCities",
+    originCity +
+    "  →  " +
+    destinationCity
+  );
+
+
+  const card =
+    document.getElementById(
+      "routeMapCard"
+    );
+
+
+  card.classList.add(
+    "visible"
+  );
+
+
+  routeAnimationStart =
+    performance.now();
+
+
+  routeAnimationActive =
+    true;
+
+
+  clearTimeout(
+    routeTimer
+  );
+
+
+  routeTimer =
+    setTimeout(
+      () => {
+
+        card.classList.remove(
+          "visible"
+        );
+
+        routeAnimationActive =
+          false;
+
+      },
+      9000
+    );
+
+}
+
+
+function drawRouteMap() {
+
+  const canvas =
+    document.getElementById(
+      "routeCanvas"
+    );
+
+
+  const card =
+    canvas.parentElement;
+
+
+  const dpr =
+    window.devicePixelRatio
+    ||
+    1;
+
+
+  const width =
+    card.clientWidth;
+
+
+  const height =
+    card.clientHeight;
+
+
+  canvas.width =
+    Math.round(
+      width * dpr
+    );
+
+
+  canvas.height =
+    Math.round(
+      height * dpr
+    );
+
+
+  const ctx =
+    canvas.getContext(
+      "2d"
+    );
+
+
+  ctx.setTransform(
+    dpr,
+    0,
+    0,
+    dpr,
+    0,
+    0
+  );
+
+
+  ctx.clearRect(
+    0,
+    0,
+    width,
+    height
+  );
+
+
+  /* World-style graticule */
+
+  ctx.strokeStyle =
+    "rgba(100,190,220,0.12)";
+
+
+  ctx.lineWidth =
+    1;
+
+
+  for (
+    let lon = -150;
+    lon <= 150;
+    lon += 30
   ) {
 
-    const box =
-      document.getElementById(
-        "lowerThird"
-      );
-
-
-    if (
-      !target ||
-      !target.available
-    ) {
-
-      box.classList.remove(
-        "visible"
-      );
-
-      radarCurrentKey =
-        null;
-
-      return;
-    }
-
-
-    setText(
-      "airline",
-      target.operator?.name ||
-      "Operator not identified"
-    );
-
-
-    setText(
-      "flight",
-      target.identity?.flight ||
-      target.identity?.callsign ||
-      "---"
-    );
-
-
-    setText(
-      "route",
-      target.route?.display ||
-      ""
-    );
-
-
-    setText(
-      "aircraft",
-      target.aircraft?.name ||
-      target.aircraft?.typeCode ||
-      "---"
-    );
-
-
-    setText(
-      "registration",
-      target.identity?.registration
-        ? (
-            "• " +
-            target.identity
-              .registration
-          )
-        : ""
-    );
-
-
-    setText(
-      "status",
-      target.movement?.displayState ||
-      target.movement?.state ||
-      "---"
-    );
-
-
-    setText(
-      "runwayText",
-      target.movement?.runway
-        ? (
-            "RUNWAY " +
-            target.movement.runway
-          )
-        : ""
-    );
-
-
-    setText(
-      "distance",
-      target.telemetry
-        ?.airportDistanceKm != null
-        ? (
-            target.telemetry
-              .airportDistanceKm +
-            " km"
-          )
-        : "---"
-    );
-
-
-    setText(
-      "altitude",
-      target.telemetry
-        ?.altitudeFt != null
-        ? (
-            target.telemetry
-              .altitudeFt +
-            " ft"
-          )
-        : "---"
-    );
-
-
-    setText(
-      "speed",
-      target.telemetry
-        ?.speedKt != null
-        ? (
-            target.telemetry
-              .speedKt +
-            " kt"
-          )
-        : "---"
-    );
-
-
-    setText(
-      "runway",
-      target.movement?.runway ||
-      "---"
-    );
-
-
-    box.classList.add(
-      "visible"
-    );
-
-
-    const currentKey =
-      currentIdentityKey(
-        target
-      );
-
-
-    radarCurrentKey =
-      currentKey;
-
-
-    if (
-      currentKey &&
-      currentKey !==
-      lastCurrentKey
-    ) {
-
-      lastCurrentKey =
-        currentKey;
-
-      animateAircraftProfile(
-        target
-      );
-
-    }
-
-  }
-
-
-  /* ==================================================
-     NEXT
-     ================================================== */
-
-
-  function chooseNext(
-    data
-  ) {
-
-    const current =
-      data.aircraft?.current;
-
-    const nextIn =
-      data.aircraft?.nextIn;
-
-    const nextOut =
-      data.aircraft?.nextOut;
-
-
-    if (
-      current &&
-      current.available
-    ) {
-
-      if (
-        current.movement?.lineage ===
-        "ARRIVAL"
-      ) {
-
-        if (
-          nextIn &&
-          nextIn.available
-        ) {
-          return nextIn;
-        }
-
-        if (
-          nextOut &&
-          nextOut.available
-        ) {
-          return nextOut;
-        }
-
-      }
-
-
-      if (
-        current.movement?.lineage ===
-        "DEPARTURE"
-      ) {
-
-        if (
-          nextOut &&
-          nextOut.available
-        ) {
-          return nextOut;
-        }
-
-        if (
-          nextIn &&
-          nextIn.available
-        ) {
-          return nextIn;
-        }
-
-      }
-
-    }
-
-
-    if (
-      nextIn &&
-      nextIn.available
-    ) {
-      return nextIn;
-    }
-
-
-    if (
-      nextOut &&
-      nextOut.available
-    ) {
-      return nextOut;
-    }
-
-
-    return null;
-
-  }
-
-
-  function showNext(
-    target
-  ) {
-
-    const box =
-      document.getElementById(
-        "nextBox"
-      );
-
-
-    if (
-      !target ||
-      !target.available
-    ) {
-
-      box.classList.remove(
-        "visible"
-      );
-
-      return;
-    }
-
-
-    setText(
-      "nextFlight",
-      target.identity?.flight ||
-      target.identity?.callsign ||
-      "---"
-    );
-
-
-    setText(
-      "nextAirline",
-      target.operator?.name ||
-      "Operator not identified"
-    );
-
-
-    setText(
-      "nextRoute",
-      target.route?.display ||
-      ""
-    );
-
-
-    const aircraft =
-      target.aircraft?.name ||
-      target.aircraft?.typeCode ||
-      "---";
-
-
-    const registration =
-      target.identity
-        ?.registration
-        ? (
-            " • " +
-            target.identity
-              .registration
-          )
-        : "";
-
-
-    setText(
-      "nextAircraft",
-      aircraft +
-      registration
-    );
-
-
-    box.classList.add(
-      "visible"
-    );
-
-  }
-
-
-  /* ==================================================
-     RADAR MATH
-     ================================================== */
-
-
-  function radarRelativeKm(
-    lat,
-    lon,
-    centerLat,
-    centerLon
-  ) {
-
-    const northKm =
+    const x =
       (
-        lat -
-        centerLat
+        lon + 180
       )
+      /
+      360
       *
-      111.32;
+      width;
 
 
-    const eastKm =
-      (
-        lon -
-        centerLon
-      )
-      *
-      111.32
-      *
-      Math.cos(
-        centerLat *
-        Math.PI /
-        180
-      );
+    ctx.beginPath();
 
-
-    return {
-      eastKm,
-      northKm
-    };
-
-  }
-
-
-  function radarAircraftKey(
-    aircraft
-  ) {
-
-    return (
-      aircraft.registration
-      ||
-      aircraft.callsign
-      ||
-      aircraft.id
-      ||
-      aircraft.hex
-      ||
-      null
-    );
-
-  }
-
-
-  /* ==================================================
-     RADAR DRAW
-     ================================================== */
-
-
-  function drawRadar() {
-
-    const canvas =
-      document.getElementById(
-        "radarCanvas"
-      );
-
-
-    const wrap =
-      canvas.parentElement;
-
-
-    const dpr =
-      window.devicePixelRatio ||
-      1;
-
-
-    const width =
-      wrap.clientWidth;
-
-    const height =
-      wrap.clientHeight;
-
-
-    const pixelWidth =
-      Math.round(
-        width * dpr
-      );
-
-
-    const pixelHeight =
-      Math.round(
-        height * dpr
-      );
-
-
-    if (
-      canvas.width !==
-      pixelWidth
-      ||
-      canvas.height !==
-      pixelHeight
-    ) {
-
-      canvas.width =
-        pixelWidth;
-
-      canvas.height =
-        pixelHeight;
-
-    }
-
-
-    const ctx =
-      canvas.getContext(
-        "2d"
-      );
-
-
-    ctx.setTransform(
-      dpr,
-      0,
-      0,
-      dpr,
-      0,
+    ctx.moveTo(
+      x,
       0
     );
 
+    ctx.lineTo(
+      x,
+      height
+    );
 
-    ctx.clearRect(
+    ctx.stroke();
+
+  }
+
+
+  for (
+    let lat = -60;
+    lat <= 60;
+    lat += 30
+  ) {
+
+    const y =
+      (
+        90 - lat
+      )
+      /
+      180
+      *
+      height;
+
+
+    ctx.beginPath();
+
+    ctx.moveTo(
       0,
-      0,
+      y
+    );
+
+    ctx.lineTo(
+      width,
+      y
+    );
+
+    ctx.stroke();
+
+  }
+
+
+  /* stylised equator */
+
+  ctx.strokeStyle =
+    "rgba(90,205,240,0.17)";
+
+
+  ctx.beginPath();
+
+  ctx.moveTo(
+    0,
+    height / 2
+  );
+
+  ctx.lineTo(
+    width,
+    height / 2
+  );
+
+  ctx.stroke();
+
+
+  if (!routeData) {
+
+    requestAnimationFrame(
+      drawRouteMap
+    );
+
+    return;
+
+  }
+
+
+  const start =
+    mapProjection(
+      Number(
+        routeData.start.lat
+      ),
+      Number(
+        routeData.start.lon
+      ),
       width,
       height
     );
 
 
-    const cx =
-      width / 2;
+  const end =
+    mapProjection(
+      Number(
+        routeData.end.lat
+      ),
+      Number(
+        routeData.end.lon
+      ),
+      width,
+      height
+    );
 
-    const cy =
-      height / 2;
 
-    const radius =
+  const midX =
+    (
+      start.x +
+      end.x
+    )
+    /
+    2;
+
+
+  const distanceX =
+    Math.abs(
+      end.x -
+      start.x
+    );
+
+
+  const curveHeight =
+    Math.max(
+      30,
       Math.min(
-        width,
-        height
+        100,
+        distanceX *
+        0.35
       )
-      *
-      0.46;
+    );
 
 
-    /* RANGE RINGS */
+  const controlY =
+    Math.min(
+      start.y,
+      end.y
+    )
+    -
+    curveHeight;
 
-    ctx.strokeStyle =
-      "rgba(83, 226, 185, 0.23)";
 
-    ctx.lineWidth =
-      1;
+  /* full route */
+
+  ctx.strokeStyle =
+    "rgba(85,215,255,0.28)";
 
 
-    [
-      0.25,
-      0.5,
-      0.75,
-      1
-    ]
-      .forEach(
-        ratio => {
+  ctx.lineWidth =
+    2;
 
-          ctx.beginPath();
 
-          ctx.arc(
-            cx,
-            cy,
-            radius * ratio,
-            0,
-            Math.PI * 2
-          );
+  ctx.beginPath();
 
-          ctx.stroke();
+  ctx.moveTo(
+    start.x,
+    start.y
+  );
 
-        }
+
+  ctx.quadraticCurveTo(
+    midX,
+    controlY,
+    end.x,
+    end.y
+  );
+
+
+  ctx.stroke();
+
+
+  /* animated route */
+
+  let progress =
+    1;
+
+
+  if (
+    routeAnimationActive
+  ) {
+
+    progress =
+      Math.min(
+        1,
+        (
+          performance.now()
+          -
+          routeAnimationStart
+        )
+        /
+        2200
       );
 
-
-    /* CROSSHAIRS */
-
-    ctx.strokeStyle =
-      "rgba(83, 226, 185, 0.16)";
+  }
 
 
-    ctx.beginPath();
+  const steps =
+    70;
 
-    ctx.moveTo(
-      cx - radius,
-      cy
+
+  const visibleSteps =
+    Math.floor(
+      steps *
+      progress
     );
 
-    ctx.lineTo(
-      cx + radius,
-      cy
-    );
 
-    ctx.moveTo(
-      cx,
-      cy - radius
-    );
-
-    ctx.lineTo(
-      cx,
-      cy + radius
-    );
-
-    ctx.stroke();
+  ctx.strokeStyle =
+    "rgba(101,225,255,0.95)";
 
 
-    /* CARDINALS */
+  ctx.lineWidth =
+    3;
 
-    ctx.fillStyle =
-      "rgba(141, 235, 208, 0.55)";
 
-    ctx.font =
-      Math.max(
-        9,
-        width * 0.035
-      )
+  ctx.beginPath();
+
+
+  for (
+    let i = 0;
+    i <= visibleSteps;
+    i++
+  ) {
+
+    const t =
+      i / steps;
+
+
+    const oneMinus =
+      1 - t;
+
+
+    const x =
+      oneMinus *
+      oneMinus *
+      start.x
       +
-      "px Arial";
+      2 *
+      oneMinus *
+      t *
+      midX
+      +
+      t *
+      t *
+      end.x;
 
 
-    ctx.textAlign =
-      "center";
-
-    ctx.textBaseline =
-      "middle";
-
-
-    ctx.fillText(
-      "N",
-      cx,
-      cy - radius + 12
-    );
-
-    ctx.fillText(
-      "S",
-      cx,
-      cy + radius - 12
-    );
-
-    ctx.fillText(
-      "W",
-      cx - radius + 12,
-      cy
-    );
-
-    ctx.fillText(
-      "E",
-      cx + radius - 12,
-      cy
-    );
+    const y =
+      oneMinus *
+      oneMinus *
+      start.y
+      +
+      2 *
+      oneMinus *
+      t *
+      controlY
+      +
+      t *
+      t *
+      end.y;
 
 
-    /* SWEEP */
+    if (i === 0) {
 
-    const sweepRad =
-      radarSweepAngle *
-      Math.PI /
-      180;
-
-
-    const gradient =
-      ctx.createConicGradient(
-        sweepRad,
-        cx,
-        cy
+      ctx.moveTo(
+        x,
+        y
       );
 
+    }
 
-    gradient.addColorStop(
-      0,
-      "rgba(73, 255, 190, 0.30)"
-    );
+    else {
 
-    gradient.addColorStop(
-      0.055,
-      "rgba(73, 255, 190, 0.10)"
-    );
+      ctx.lineTo(
+        x,
+        y
+      );
 
-    gradient.addColorStop(
-      0.16,
-      "rgba(73, 255, 190, 0)"
-    );
+    }
 
-    gradient.addColorStop(
-      1,
-      "rgba(73, 255, 190, 0)"
-    );
+  }
+
+
+  ctx.stroke();
+
+
+  /* origin */
+
+  ctx.fillStyle =
+    "#5ee2ff";
+
+
+  ctx.beginPath();
+
+  ctx.arc(
+    start.x,
+    start.y,
+    4,
+    0,
+    Math.PI * 2
+  );
+
+  ctx.fill();
+
+
+  /* destination */
+
+  ctx.fillStyle =
+    "#ffffff";
+
+
+  ctx.beginPath();
+
+  ctx.arc(
+    end.x,
+    end.y,
+    5,
+    0,
+    Math.PI * 2
+  );
+
+  ctx.fill();
+
+
+  /* moving aircraft marker */
+
+  if (
+    progress <
+    1
+  ) {
+
+    const t =
+      progress;
+
+
+    const oneMinus =
+      1 - t;
+
+
+    const x =
+      oneMinus *
+      oneMinus *
+      start.x
+      +
+      2 *
+      oneMinus *
+      t *
+      midX
+      +
+      t *
+      t *
+      end.x;
+
+
+    const y =
+      oneMinus *
+      oneMinus *
+      start.y
+      +
+      2 *
+      oneMinus *
+      t *
+      controlY
+      +
+      t *
+      t *
+      end.y;
 
 
     ctx.fillStyle =
-      gradient;
+      "#ffca57";
 
 
     ctx.beginPath();
 
     ctx.arc(
-      cx,
-      cy,
-      radius,
+      x,
+      y,
+      4.5,
       0,
       Math.PI * 2
     );
 
     ctx.fill();
 
-
-    ctx.strokeStyle =
-      "rgba(104, 255, 205, 0.65)";
-
-    ctx.lineWidth =
-      1.3;
+  }
 
 
-    ctx.beginPath();
+  requestAnimationFrame(
+    drawRouteMap
+  );
 
-    ctx.moveTo(
-      cx,
-      cy
+}
+
+
+/* =====================================================
+   CURRENT
+   ===================================================== */
+
+function showMain(
+  target
+) {
+
+  const box =
+    document.getElementById(
+      "lowerThird"
     );
 
-    ctx.lineTo(
-      cx +
-      Math.sin(
-        sweepRad
-      )
-      *
-      radius,
 
-      cy -
-      Math.cos(
-        sweepRad
-      )
-      *
-      radius
+  if (
+    !target
+    ||
+    !target.available
+  ) {
+
+    box.classList.remove(
+      "visible"
     );
 
-    ctx.stroke();
+    radarCurrentKey =
+      null;
+
+    return;
+
+  }
 
 
-    /* AIRPORT CENTER */
+  setText(
+    "airline",
+    target.operator?.name
+    ||
+    "Operator not identified"
+  );
 
-    ctx.fillStyle =
-      "rgba(255,255,255,0.92)";
+
+  setText(
+    "flight",
+    target.identity?.flight
+    ||
+    target.identity?.callsign
+    ||
+    "---"
+  );
 
 
-    ctx.beginPath();
+  setText(
+    "route",
+    target.route?.display
+    ||
+    ""
+  );
 
-    ctx.arc(
-      cx,
-      cy,
-      3.2,
-      0,
-      Math.PI * 2
+
+  setText(
+    "aircraft",
+    target.aircraft?.name
+    ||
+    target.aircraft?.typeCode
+    ||
+    "---"
+  );
+
+
+  setText(
+    "registration",
+    target.identity?.registration
+      ? "• " +
+        target.identity.registration
+      : ""
+  );
+
+
+  setText(
+    "status",
+    target.movement?.displayState
+    ||
+    target.movement?.state
+    ||
+    "---"
+  );
+
+
+  setText(
+    "runwayText",
+    target.movement?.runway
+      ? "RUNWAY " +
+        target.movement.runway
+      : ""
+  );
+
+
+  setText(
+    "distance",
+    target.telemetry
+      ?.airportDistanceKm != null
+      ? target.telemetry
+          .airportDistanceKm
+        + " km"
+      : "---"
+  );
+
+
+  setText(
+    "altitude",
+    target.telemetry
+      ?.altitudeFt != null
+      ? target.telemetry
+          .altitudeFt
+        + " ft"
+      : "---"
+  );
+
+
+  setText(
+    "speed",
+    target.telemetry
+      ?.speedKt != null
+      ? target.telemetry
+          .speedKt
+        + " kt"
+      : "---"
+  );
+
+
+  setText(
+    "runway",
+    target.movement?.runway
+    ||
+    "---"
+  );
+
+
+  box.classList.add(
+    "visible"
+  );
+
+
+  const key =
+    identityKey(
+      target
     );
 
-    ctx.fill();
+
+  radarCurrentKey =
+    key;
 
 
-    /* AIRCRAFT TARGETS */
+  if (
+    key
+    &&
+    key !==
+    lastCurrentKey
+  ) {
+
+    lastCurrentKey =
+      key;
+
+
+    animateAircraftProfile(
+      target
+    );
+
 
     if (
-      radarAirport &&
-      Array.isArray(
-        radarAircraft
-      )
+      target.route?.found
     ) {
 
-      for (
-        const aircraft
-        of radarAircraft
+      showRouteMap(
+        target
+      );
+
+    }
+
+  }
+
+}
+
+
+/* =====================================================
+   NEXT
+   ===================================================== */
+
+function chooseNext(
+  data
+) {
+
+  const current =
+    data.aircraft?.current;
+
+
+  const nextIn =
+    data.aircraft?.nextIn;
+
+
+  const nextOut =
+    data.aircraft?.nextOut;
+
+
+  if (
+    current?.available
+  ) {
+
+    if (
+      current.movement?.lineage ===
+      "ARRIVAL"
+    ) {
+
+      if (
+        nextIn?.available
+      ) {
+        return nextIn;
+      }
+
+      if (
+        nextOut?.available
+      ) {
+        return nextOut;
+      }
+
+    }
+
+
+    if (
+      current.movement?.lineage ===
+      "DEPARTURE"
+    ) {
+
+      if (
+        nextOut?.available
+      ) {
+        return nextOut;
+      }
+
+      if (
+        nextIn?.available
+      ) {
+        return nextIn;
+      }
+
+    }
+
+  }
+
+
+  return (
+    nextIn?.available
+      ? nextIn
+      : nextOut?.available
+        ? nextOut
+        : null
+  );
+
+}
+
+
+function showNext(
+  target
+) {
+
+  const box =
+    document.getElementById(
+      "nextBox"
+    );
+
+
+  if (
+    !target
+    ||
+    !target.available
+  ) {
+
+    box.classList.remove(
+      "visible"
+    );
+
+    return;
+
+  }
+
+
+  setText(
+    "nextFlight",
+    target.identity?.flight
+    ||
+    target.identity?.callsign
+    ||
+    "---"
+  );
+
+
+  setText(
+    "nextAirline",
+    target.operator?.name
+    ||
+    "Operator not identified"
+  );
+
+
+  setText(
+    "nextRoute",
+    target.route?.display
+    ||
+    ""
+  );
+
+
+  setText(
+    "nextAircraft",
+    (
+      target.aircraft?.name
+      ||
+      target.aircraft?.typeCode
+      ||
+      "---"
+    )
+    +
+    (
+      target.identity?.registration
+        ? " • " +
+          target.identity.registration
+        : ""
+    )
+  );
+
+
+  box.classList.add(
+    "visible"
+  );
+
+}
+
+
+/* =====================================================
+   RADAR
+   ===================================================== */
+
+function radarRelativeKm(
+  lat,
+  lon,
+  centerLat,
+  centerLon
+) {
+
+  const northKm =
+    (
+      lat -
+      centerLat
+    )
+    *
+    111.32;
+
+
+  const eastKm =
+    (
+      lon -
+      centerLon
+    )
+    *
+    111.32
+    *
+    Math.cos(
+      centerLat *
+      Math.PI /
+      180
+    );
+
+
+  return {
+    northKm,
+    eastKm
+  };
+
+}
+
+
+function radarKey(
+  aircraft
+) {
+
+  return (
+    aircraft.registration
+    ||
+    aircraft.callsign
+    ||
+    aircraft.id
+    ||
+    aircraft.hex
+    ||
+    null
+  );
+
+}
+
+
+function drawRadar() {
+
+  const canvas =
+    document.getElementById(
+      "radarCanvas"
+    );
+
+
+  const wrap =
+    canvas.parentElement;
+
+
+  const dpr =
+    window.devicePixelRatio
+    ||
+    1;
+
+
+  const width =
+    wrap.clientWidth;
+
+
+  const height =
+    wrap.clientHeight;
+
+
+  canvas.width =
+    Math.round(
+      width *
+      dpr
+    );
+
+
+  canvas.height =
+    Math.round(
+      height *
+      dpr
+    );
+
+
+  const ctx =
+    canvas.getContext(
+      "2d"
+    );
+
+
+  ctx.setTransform(
+    dpr,
+    0,
+    0,
+    dpr,
+    0,
+    0
+  );
+
+
+  ctx.clearRect(
+    0,
+    0,
+    width,
+    height
+  );
+
+
+  const cx =
+    width /
+    2;
+
+
+  const cy =
+    height /
+    2;
+
+
+  const radius =
+    Math.min(
+      width,
+      height
+    )
+    *
+    0.46;
+
+
+  ctx.strokeStyle =
+    "rgba(83,226,185,0.23)";
+
+
+  ctx.lineWidth =
+    1;
+
+
+  [
+    0.25,
+    0.5,
+    0.75,
+    1
+  ]
+  .forEach(
+    ring => {
+
+      ctx.beginPath();
+
+      ctx.arc(
+        cx,
+        cy,
+        radius *
+        ring,
+        0,
+        Math.PI *
+        2
+      );
+
+      ctx.stroke();
+
+    }
+  );
+
+
+  ctx.strokeStyle =
+    "rgba(83,226,185,0.16)";
+
+
+  ctx.beginPath();
+
+  ctx.moveTo(
+    cx -
+    radius,
+    cy
+  );
+
+  ctx.lineTo(
+    cx +
+    radius,
+    cy
+  );
+
+  ctx.moveTo(
+    cx,
+    cy -
+    radius
+  );
+
+  ctx.lineTo(
+    cx,
+    cy +
+    radius
+  );
+
+  ctx.stroke();
+
+
+  ctx.fillStyle =
+    "rgba(141,235,208,0.55)";
+
+
+  ctx.font =
+    Math.max(
+      9,
+      width *
+      0.035
+    )
+    +
+    "px Arial";
+
+
+  ctx.textAlign =
+    "center";
+
+
+  ctx.fillText(
+    "N",
+    cx,
+    cy -
+    radius +
+    13
+  );
+
+
+  ctx.fillText(
+    "S",
+    cx,
+    cy +
+    radius -
+    8
+  );
+
+
+  ctx.fillText(
+    "W",
+    cx -
+    radius +
+    12,
+    cy +
+    4
+  );
+
+
+  ctx.fillText(
+    "E",
+    cx +
+    radius -
+    12,
+    cy +
+    4
+  );
+
+
+  const sweepRad =
+    radarSweepAngle *
+    Math.PI /
+    180;
+
+
+  const gradient =
+    ctx.createConicGradient(
+      sweepRad,
+      cx,
+      cy
+    );
+
+
+  gradient.addColorStop(
+    0,
+    "rgba(73,255,190,0.30)"
+  );
+
+
+  gradient.addColorStop(
+    0.07,
+    "rgba(73,255,190,0.10)"
+  );
+
+
+  gradient.addColorStop(
+    0.18,
+    "rgba(73,255,190,0)"
+  );
+
+
+  gradient.addColorStop(
+    1,
+    "rgba(73,255,190,0)"
+  );
+
+
+  ctx.fillStyle =
+    gradient;
+
+
+  ctx.beginPath();
+
+  ctx.arc(
+    cx,
+    cy,
+    radius,
+    0,
+    Math.PI *
+    2
+  );
+
+  ctx.fill();
+
+
+  ctx.strokeStyle =
+    "rgba(104,255,205,0.7)";
+
+
+  ctx.beginPath();
+
+  ctx.moveTo(
+    cx,
+    cy
+  );
+
+
+  ctx.lineTo(
+    cx +
+    Math.sin(
+      sweepRad
+    )
+    *
+    radius,
+
+    cy -
+    Math.cos(
+      sweepRad
+    )
+    *
+    radius
+  );
+
+
+  ctx.stroke();
+
+
+  ctx.fillStyle =
+    "white";
+
+
+  ctx.beginPath();
+
+  ctx.arc(
+    cx,
+    cy,
+    3,
+    0,
+    Math.PI *
+    2
+  );
+
+  ctx.fill();
+
+
+  if (
+    radarAirport
+    &&
+    Array.isArray(
+      radarAircraft
+    )
+  ) {
+
+    for (
+      const aircraft
+      of radarAircraft
+    ) {
+
+      const lat =
+        Number(
+          aircraft.lat
+        );
+
+
+      const lon =
+        Number(
+          aircraft.lon
+        );
+
+
+      if (
+        !Number.isFinite(
+          lat
+        )
+        ||
+        !Number.isFinite(
+          lon
+        )
+      ) {
+        continue;
+      }
+
+
+      const rel =
+        radarRelativeKm(
+          lat,
+          lon,
+          radarAirport.lat,
+          radarAirport.lon
+        );
+
+
+      const distance =
+        Math.sqrt(
+          rel.eastKm **
+          2
+          +
+          rel.northKm **
+          2
+        );
+
+
+      if (
+        distance >
+        RADAR_RANGE_KM
+      ) {
+        continue;
+      }
+
+
+      const x =
+        cx
+        +
+        (
+          rel.eastKm
+          /
+          RADAR_RANGE_KM
+        )
+        *
+        radius;
+
+
+      const y =
+        cy
+        -
+        (
+          rel.northKm
+          /
+          RADAR_RANGE_KM
+        )
+        *
+        radius;
+
+
+      const isCurrent =
+        radarKey(
+          aircraft
+        )
+        ===
+        radarCurrentKey;
+
+
+      ctx.fillStyle =
+        isCurrent
+          ? "#ffca57"
+          : aircraft.onGround
+            ? "#6dc6ff"
+            : "#68ffc2";
+
+
+      ctx.beginPath();
+
+      ctx.arc(
+        x,
+        y,
+        isCurrent
+          ? 5
+          : 2.6,
+        0,
+        Math.PI *
+        2
+      );
+
+      ctx.fill();
+
+
+      if (
+        isCurrent
       ) {
 
-        const lat =
-          Number(
-            aircraft.lat
-          );
+        ctx.strokeStyle =
+          "rgba(255,202,87,0.75)";
 
-        const lon =
-          Number(
-            aircraft.lon
-          );
-
-
-        if (
-          !Number.isFinite(lat)
-          ||
-          !Number.isFinite(lon)
-        ) {
-          continue;
-        }
-
-
-        const relative =
-          radarRelativeKm(
-            lat,
-            lon,
-            radarAirport.lat,
-            radarAirport.lon
-          );
-
-
-        const distance =
-          Math.sqrt(
-            relative.eastKm ** 2
-            +
-            relative.northKm ** 2
-          );
-
-
-        if (
-          distance >
-          RADAR_RANGE_KM
-        ) {
-          continue;
-        }
-
-
-        const x =
-          cx
-          +
-          (
-            relative.eastKm /
-            RADAR_RANGE_KM
-          )
-          *
-          radius;
-
-
-        const y =
-          cy
-          -
-          (
-            relative.northKm /
-            RADAR_RANGE_KM
-          )
-          *
-          radius;
-
-
-        const key =
-          radarAircraftKey(
-            aircraft
-          );
-
-
-        const isCurrent =
-          key &&
-          radarCurrentKey &&
-          key ===
-          radarCurrentKey;
-
-
-        /* target */
 
         ctx.beginPath();
 
         ctx.arc(
           x,
           y,
-          isCurrent
-            ? 5
-            : 2.6,
+          9,
           0,
-          Math.PI * 2
+          Math.PI *
+          2
         );
+
+        ctx.stroke();
 
 
         ctx.fillStyle =
-          isCurrent
-            ? "rgba(255, 199, 74, 0.98)"
-            : aircraft.onGround
-              ? "rgba(105, 193, 255, 0.78)"
-              : "rgba(103, 255, 190, 0.88)";
+          "#ffe29a";
 
 
-        ctx.fill();
-
-
-        if (isCurrent) {
-
-          ctx.beginPath();
-
-          ctx.arc(
-            x,
-            y,
+        ctx.font =
+          Math.max(
             9,
-            0,
-            Math.PI * 2
-          );
-
-          ctx.strokeStyle =
-            "rgba(255, 199, 74, 0.72)";
-
-          ctx.lineWidth =
-            1.5;
-
-          ctx.stroke();
+            width *
+            0.032
+          )
+          +
+          "px Arial";
 
 
-          const label =
-            aircraft.callsign
-            ||
-            aircraft.registration
-            ||
-            "";
+        ctx.textAlign =
+          "left";
 
 
-          if (label) {
-
-            ctx.font =
-              Math.max(
-                9,
-                width *
-                0.032
-              )
-              +
-              "px Arial";
-
-
-            ctx.textAlign =
-              "left";
-
-            ctx.textBaseline =
-              "middle";
-
-
-            ctx.fillStyle =
-              "rgba(255, 221, 145, 0.96)";
-
-
-            ctx.fillText(
-              label,
-              x + 11,
-              y - 1
-            );
-
-          }
-
-        }
+        ctx.fillText(
+          aircraft.callsign
+          ||
+          aircraft.registration
+          ||
+          "",
+          x + 11,
+          y + 3
+        );
 
       }
 
     }
 
+  }
 
-    radarSweepAngle =
-      (
-        radarSweepAngle +
-        0.75
+
+  radarSweepAngle =
+    (
+      radarSweepAngle +
+      0.75
+    )
+    %
+    360;
+
+
+  requestAnimationFrame(
+    drawRadar
+  );
+
+}
+
+
+/* =====================================================
+   DATA UPDATE
+   ===================================================== */
+
+async function update() {
+
+  if (busy) {
+    return;
+  }
+
+
+  busy =
+    true;
+
+
+  const params =
+    new URLSearchParams(
+      window.location.search
+    );
+
+
+  const airport =
+    (
+      params.get(
+        "airport"
       )
-      %
-      360;
+      ||
+      "PRG"
+    )
+    .trim()
+    .toUpperCase();
 
 
-    requestAnimationFrame(
-      drawRadar
+  try {
+
+    const [
+      broadcastResponse,
+      engineResponse
+    ]
+    =
+    await Promise.all([
+
+      fetch(
+        "/api/broadcast?airport="
+        +
+        encodeURIComponent(
+          airport
+        )
+        +
+        "&t="
+        +
+        Date.now(),
+        {
+          cache:
+            "no-store"
+        }
+      ),
+
+      fetch(
+        "/api/engine?airport="
+        +
+        encodeURIComponent(
+          airport
+        )
+        +
+        "&t="
+        +
+        Date.now(),
+        {
+          cache:
+            "no-store"
+        }
+      )
+
+    ]);
+
+
+    const [
+      broadcastRaw,
+      engineRaw
+    ]
+    =
+    await Promise.all([
+
+      broadcastResponse.text(),
+
+      engineResponse.text()
+
+    ]);
+
+
+    const data =
+      JSON.parse(
+        broadcastRaw
+      );
+
+
+    const engine =
+      JSON.parse(
+        engineRaw
+      );
+
+
+    if (
+      !broadcastResponse.ok
+      ||
+      !data.ok
+    ) {
+
+      throw new Error(
+        data.error
+        ||
+        "Broadcast API failed"
+      );
+
+    }
+
+
+    showMain(
+      data.aircraft?.current
+    );
+
+
+    showNext(
+      chooseNext(
+        data
+      )
+    );
+
+
+    if (
+      engineResponse.ok
+      &&
+      engine.ok
+    ) {
+
+      radarAircraft =
+        Array.isArray(
+          engine.aircraft
+        )
+          ? engine.aircraft
+          : [];
+
+
+      radarAirport = {
+        lat:
+          Number(
+            engine.airport?.lat
+          ),
+
+        lon:
+          Number(
+            engine.airport?.lon
+          )
+      };
+
+
+      if (
+        !Number.isFinite(
+          radarAirport.lat
+        )
+        ||
+        !Number.isFinite(
+          radarAirport.lon
+        )
+      ) {
+
+        radarAirport =
+          null;
+
+      }
+
+    }
+
+  }
+
+  catch (
+    error
+  ) {
+
+    console.error(
+      "Overlay update failed:",
+      error
     );
 
   }
 
-
-  /* ==================================================
-     DATA UPDATE
-     ================================================== */
-
-
-  async function update() {
-
-    if (busy) {
-      return;
-    }
-
+  finally {
 
     busy =
-      true;
-
-
-    const params =
-      new URLSearchParams(
-        window.location.search
-      );
-
-
-    const airport =
-      (
-        params.get(
-          "airport"
-        )
-        ||
-        "PRG"
-      )
-        .trim()
-        .toUpperCase();
-
-
-    try {
-
-      const [
-        broadcastResponse,
-        engineResponse
-      ] =
-        await Promise.all([
-          fetch(
-            "/api/broadcast?airport=" +
-            encodeURIComponent(
-              airport
-            )
-            +
-            "&t=" +
-            Date.now(),
-            {
-              cache:
-                "no-store"
-            }
-          ),
-
-          fetch(
-            "/api/engine?airport=" +
-            encodeURIComponent(
-              airport
-            )
-            +
-            "&t=" +
-            Date.now(),
-            {
-              cache:
-                "no-store"
-            }
-          )
-        ]);
-
-
-      const [
-        broadcastRaw,
-        engineRaw
-      ] =
-        await Promise.all([
-          broadcastResponse.text(),
-          engineResponse.text()
-        ]);
-
-
-      let data;
-      let engine;
-
-
-      try {
-
-        data =
-          JSON.parse(
-            broadcastRaw
-          );
-
-        engine =
-          JSON.parse(
-            engineRaw
-          );
-
-      }
-      catch {
-
-        throw new Error(
-          "Live data returned invalid JSON"
-        );
-
-      }
-
-
-      if (
-        !broadcastResponse.ok
-        ||
-        !data.ok
-      ) {
-
-        throw new Error(
-          data.error
-          ||
-          "Broadcast API failed"
-        );
-
-      }
-
-
-      showMain(
-        data.aircraft?.current
-      );
-
-
-      showNext(
-        chooseNext(
-          data
-        )
-      );
-
-
-      if (
-        engineResponse.ok &&
-        engine.ok
-      ) {
-
-        radarAircraft =
-          Array.isArray(
-            engine.aircraft
-          )
-            ? engine.aircraft
-            : [];
-
-
-        radarAirport = {
-          lat:
-            Number(
-              engine.airport?.lat
-            ),
-
-          lon:
-            Number(
-              engine.airport?.lon
-            )
-        };
-
-
-        if (
-          !Number.isFinite(
-            radarAirport.lat
-          )
-          ||
-          !Number.isFinite(
-            radarAirport.lon
-          )
-        ) {
-
-          radarAirport =
-            null;
-
-        }
-
-      }
-
-    }
-
-
-    catch (error) {
-
-      console.error(
-        "Overlay update failed:",
-        error
-      );
-
-    }
-
-
-    finally {
-
-      busy =
-        false;
-
-    }
+      false;
 
   }
 
-
-  /* ==================================================
-     START
-     ================================================== */
+}
 
 
-  drawRadar();
+/* =====================================================
+   START
+   ===================================================== */
+
+drawRadar();
+
+drawRouteMap();
+
+update();
 
 
-  update();
-
-
-  setInterval(
-    update,
-    UPDATE_INTERVAL
-  );
-
+setInterval(
+  update,
+  UPDATE_INTERVAL
+);
 
 </script>
 
