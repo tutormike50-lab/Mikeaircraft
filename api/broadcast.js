@@ -1,136 +1,137 @@
 // MikeAircraft Broadcast API
-// Version 0.1
+// Version 0.2
 //
-// Purpose:
-// Convert MikeAircraft Engine intelligence into a clean,
-// stable feed for livestream graphics.
-//
-// Future:
-// airline + route + aircraft enrichment
-// route map data
-// intelligent display modes
-// NEXT aircraft
-// aircraft profile graphics
-// storytelling / recent history
+// Directly invokes MikeAircraft Engine inside the same
+// Vercel function environment.
+// No public HTTP self-fetch, so Vercel deployment
+// protection cannot block it.
+
+const engineHandler =
+  require("./engine.js");
 
 module.exports = async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "no-store");
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    "*"
+  );
+
+  res.setHeader(
+    "Cache-Control",
+    "no-store"
+  );
 
   try {
+
     const airport =
-      String(req.query.airport || "PRG")
+      String(
+        req.query.airport || "PRG"
+      )
         .trim()
         .toUpperCase();
 
     // =====================================================
-    // CALL THE EXISTING ENGINE
+    // RUN ENGINE DIRECTLY
     // =====================================================
 
-    const protocol =
-      req.headers["x-forwarded-proto"] ||
-      "https";
+    let engineStatus = 200;
+    let engineData = null;
 
-    const host =
-      req.headers.host;
+    const fakeReq = {
+      method: "GET",
 
-    if (!host) {
+      query: {
+        airport
+      },
+
+      headers:
+        req.headers || {}
+    };
+
+    const fakeRes = {
+
+      setHeader() {
+        return fakeRes;
+      },
+
+      status(code) {
+        engineStatus = code;
+        return fakeRes;
+      },
+
+      json(data) {
+        engineData = data;
+        return data;
+      },
+
+      send(data) {
+        engineData = data;
+        return data;
+      },
+
+      end() {
+        return null;
+      }
+    };
+
+    await engineHandler(
+      fakeReq,
+      fakeRes
+    );
+
+    if (
+      !engineData ||
+      engineStatus >= 400 ||
+      !engineData.ok
+    ) {
+
+      const detail =
+        engineData &&
+        engineData.error
+          ? (
+              typeof engineData.error === "string"
+                ? engineData.error
+                : JSON.stringify(
+                    engineData.error
+                  )
+            )
+          : "Engine request failed";
+
       throw new Error(
-        "Unable to determine server host"
+        detail
       );
     }
-
-    const engineUrl =
-      protocol +
-      "://" +
-      host +
-      "/api/engine?airport=" +
-      encodeURIComponent(airport);
-
-    const controller =
-      new AbortController();
-
-    const timeout =
-      setTimeout(
-        () => controller.abort(),
-        12000
-      );
-
-    let response;
-
-    try {
-      response =
-        await fetch(
-          engineUrl,
-          {
-            cache: "no-store",
-            headers: {
-              "Accept":
-                "application/json"
-            },
-            signal:
-              controller.signal
-          }
-        );
-    }
-    finally {
-      clearTimeout(timeout);
-    }
-
-    const raw =
-      await response.text();
-
-    let engine;
-
-    try {
-      engine =
-        JSON.parse(raw);
-    }
-    catch {
-      throw new Error(
-        "Engine returned invalid JSON"
-      );
-    }
-
-   if (
-  !response.ok ||
-  !engine.ok
-) {
-  const engineError =
-    typeof engine.error === "string"
-      ? engine.error
-      : JSON.stringify(
-          engine.error ||
-          engine
-        );
-
-  throw new Error(
-    engineError ||
-    "Engine request failed"
-  );
-}
 
     // =====================================================
-    // BROADCAST TARGET FORMATTER
+    // FORMAT TARGET FOR BROADCAST
     // =====================================================
 
     function formatTarget(
       target,
       role
     ) {
+
       if (!target) {
+
         return {
           available: false,
+
           role,
+
           callsign: null,
           registration: null,
           typeCode: null,
+
           state: null,
+          lineage: null,
+
           runway: null,
+
           distanceKm: null,
           thresholdKm: null,
+
           altitudeFt: null,
           speedKt: null,
+
           confidence: null,
           score: null
         };
@@ -152,6 +153,9 @@ module.exports = async function handler(req, res) {
 
         state:
           target.state || null,
+
+        lineage:
+          target.lineage || null,
 
         runway:
           target.runway || null,
@@ -181,7 +185,7 @@ module.exports = async function handler(req, res) {
     // =====================================================
 
     const intelligence =
-      engine.intelligence || {};
+      engineData.intelligence || {};
 
     const current =
       formatTarget(
@@ -202,15 +206,7 @@ module.exports = async function handler(req, res) {
       );
 
     // =====================================================
-    // BASIC DISPLAY DECISION
-    //
-    // This will become much smarter later.
-    // For now:
-    //
-    // CURRENT exists -> PRIMARY
-    // otherwise NEXT IN -> PREVIEW
-    // otherwise NEXT OUT -> PREVIEW
-    // otherwise IDLE
+    // BASIC BROADCAST DISPLAY MODE
     // =====================================================
 
     let displayMode =
@@ -220,20 +216,25 @@ module.exports = async function handler(req, res) {
       null;
 
     if (current.available) {
+
       displayMode =
         "PRIMARY";
 
       primaryRole =
         "CURRENT";
     }
+
     else if (nextIn.available) {
+
       displayMode =
         "PREVIEW";
 
       primaryRole =
         "NEXT_IN";
     }
+
     else if (nextOut.available) {
+
       displayMode =
         "PREVIEW";
 
@@ -242,31 +243,52 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // BROADCAST RESPONSE
+    // RESPONSE
     // =====================================================
 
     return res
       .status(200)
       .json({
+
         ok: true,
 
         service:
           "MikeAircraft Broadcast",
 
         version:
-          "0.1",
+          "0.2",
 
         generatedAt:
-          new Date().toISOString(),
+          new Date()
+            .toISOString(),
 
-        airport,
+        airport: {
+          code:
+            engineData.airport?.code ||
+            airport,
+
+          icao:
+            engineData.airport?.icao ||
+            null,
+
+          name:
+            engineData.airport?.name ||
+            null
+        },
 
         engine: {
           version:
-            engine.version || null,
+            engineData.version || null,
+
+          stage:
+            engineData.stage || null,
 
           dataStatus:
-            engine.dataStatus || null
+            engineData.dataStatus || null,
+
+          source:
+            engineData.traffic?.source ||
+            null
         },
 
         display: {
@@ -283,28 +305,28 @@ module.exports = async function handler(req, res) {
         }
       });
   }
+
   catch (error) {
-    const timedOut =
-      error.name ===
-      "AbortError";
+
+    console.error(
+      "MikeAircraft Broadcast error:",
+      error
+    );
 
     return res
-      .status(
-        timedOut ? 504 : 500
-      )
+      .status(500)
       .json({
+
         ok: false,
 
         service:
           "MikeAircraft Broadcast",
 
         version:
-          "0.1",
+          "0.2",
 
         error:
-          timedOut
-            ? "Engine request timed out"
-            : error.message
+          error.message
       });
   }
 };
