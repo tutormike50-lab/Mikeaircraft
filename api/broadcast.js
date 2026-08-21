@@ -92,15 +92,23 @@ module.exports = async function handler(req, res) {
       );
     }
 
-    if (
-      !response.ok ||
-      !engine.ok
-    ) {
-      throw new Error(
-        engine.error ||
-        "Engine request failed"
-      );
-    }
+   if (
+  !response.ok ||
+  !engine.ok
+) {
+  const engineError =
+    typeof engine.error === "string"
+      ? engine.error
+      : JSON.stringify(
+          engine.error ||
+          engine
+        );
+
+  throw new Error(
+    engineError ||
+    "Engine request failed"
+  );
+}
 
     // =====================================================
     // BROADCAST TARGET FORMATTER
