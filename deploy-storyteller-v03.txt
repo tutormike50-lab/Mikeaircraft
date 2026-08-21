@@ -1,0 +1,2 @@
+MikeAircraft Storyteller v0.3 deployment trigger.
+Route-coherence guard added for arrival/departure stories.
