@@ -1,12 +1,13 @@
 // MikeAircraft Broadcast API
-// Version 0.3
+// Version 0.4
 //
 // Fully enriched broadcast feed.
 //
 // Combines:
-// Engine v0.6        -> movement intelligence
-// Enrichment v0.2    -> airline + friendly aircraft name
-// Route v0.5         -> origin / destination
+// Engine v0.6            -> movement intelligence
+// Enrichment v0.2        -> airline + friendly aircraft fallback
+// Route v0.5             -> origin / destination
+// AircraftInfo v0.1      -> detailed aircraft identity
 //
 // Intended consumer:
 // MikeAircraft livestream graphics system
@@ -19,6 +20,9 @@ const enrichHandler =
 
 const routeHandler =
   require("./route.js");
+
+const aircraftInfoHandler =
+  require("./aircraftinfo.js");
 
 module.exports = async function handler(req, res) {
   res.setHeader(
@@ -40,10 +44,7 @@ module.exports = async function handler(req, res) {
         .toUpperCase();
 
     // =====================================================
-    // INTERNAL HANDLER INVOKER
-    //
-    // Lets the Broadcast API call our own API modules
-    // directly without going through protected Vercel URLs.
+    // INTERNAL MODULE INVOKER
     // =====================================================
 
     async function invokeHandler(
@@ -55,12 +56,8 @@ module.exports = async function handler(req, res) {
 
       const fakeReq = {
         method: "GET",
-
-        query:
-          query || {},
-
-        headers:
-          req.headers || {}
+        query: query || {},
+        headers: req.headers || {}
       };
 
       const fakeRes = {
@@ -94,16 +91,13 @@ module.exports = async function handler(req, res) {
       );
 
       return {
-        status:
-          statusCode,
-
-        data:
-          responseData
+        status: statusCode,
+        data: responseData
       };
     }
 
     // =====================================================
-    // STEP 1 — RUN MOVEMENT ENGINE
+    // STEP 1 — MOVEMENT ENGINE
     // =====================================================
 
     const engineResult =
@@ -141,7 +135,7 @@ module.exports = async function handler(req, res) {
       engine.intelligence || {};
 
     // =====================================================
-    // TARGET ENRICHMENT
+    // TARGET BUILDER
     // =====================================================
 
     async function buildTarget(
@@ -158,17 +152,20 @@ module.exports = async function handler(req, res) {
       const callsign =
         target.callsign || null;
 
+      const registration =
+        target.registration || null;
+
       const typeCode =
         target.type || null;
 
-      // ---------------------------------------------
-      // Run enrichment + route lookup in parallel.
-      // Failures here are NOT fatal.
-      // ---------------------------------------------
+      // =================================================
+      // RUN LOOKUPS IN PARALLEL
+      // =================================================
 
       const [
         enrichResult,
-        routeResult
+        routeResult,
+        aircraftInfoResult
       ] =
         await Promise.all([
           invokeHandler(
@@ -204,6 +201,24 @@ module.exports = async function handler(req, res) {
             : Promise.resolve({
                 status: 404,
                 data: null
+              }),
+
+          registration
+            ? invokeHandler(
+                aircraftInfoHandler,
+                {
+                  registration
+                }
+              )
+              .catch(
+                () => ({
+                  status: 500,
+                  data: null
+                })
+              )
+            : Promise.resolve({
+                status: 404,
+                data: null
               })
         ]);
 
@@ -223,6 +238,15 @@ module.exports = async function handler(req, res) {
           ? routeResult.data.route
           : null;
 
+      const aircraftInfo =
+        aircraftInfoResult &&
+        aircraftInfoResult.data &&
+        aircraftInfoResult.data.ok &&
+        aircraftInfoResult.data.found &&
+        aircraftInfoResult.data.aircraft
+          ? aircraftInfoResult.data.aircraft
+          : null;
+
       // =================================================
       // OPERATOR
       // =================================================
@@ -231,7 +255,8 @@ module.exports = async function handler(req, res) {
         identified: false,
         name: null,
         icao: null,
-        iata: null
+        iata: null,
+        country: null
       };
 
       if (
@@ -251,6 +276,10 @@ module.exports = async function handler(req, res) {
 
           iata:
             routeData.airline.iata ||
+            null,
+
+          country:
+            routeData.airline.country ||
             null
         };
       }
@@ -272,6 +301,31 @@ module.exports = async function handler(req, res) {
 
           iata:
             enrichment.operator.iata ||
+            null,
+
+          country:
+            null
+        };
+      }
+      else if (
+        aircraftInfo &&
+        aircraftInfo.owner
+      ) {
+        operator = {
+          identified: true,
+
+          name:
+            aircraftInfo.owner,
+
+          icao:
+            aircraftInfo.operatorFlag ||
+            null,
+
+          iata:
+            null,
+
+          country:
+            aircraftInfo.ownerCountry ||
             null
         };
       }
@@ -297,19 +351,96 @@ module.exports = async function handler(req, res) {
         null;
 
       // =================================================
-      // FRIENDLY AIRCRAFT NAME
+      // AIRCRAFT IDENTITY
+      //
+      // Priority:
+      // 1. AircraftInfo database
+      // 2. Enrichment type table
+      // 3. Raw ICAO type code
       // =================================================
 
-      const aircraftName =
-        (
-          enrichment &&
-          enrichment.aircraft &&
-          enrichment.aircraft.name
-        )
-        ||
-        typeCode
-        ||
+      let aircraftName =
+        typeCode ||
         null;
+
+      let manufacturer =
+        null;
+
+      let owner =
+        null;
+
+      let ownerCountry =
+        null;
+
+      let photo =
+        null;
+
+      let thumbnail =
+        null;
+
+      let modeS =
+        null;
+
+      if (aircraftInfo) {
+        manufacturer =
+          aircraftInfo.manufacturer ||
+          null;
+
+        owner =
+          aircraftInfo.owner ||
+          null;
+
+        ownerCountry =
+          aircraftInfo.ownerCountry ||
+          null;
+
+        photo =
+          aircraftInfo.photo ||
+          null;
+
+        thumbnail =
+          aircraftInfo.thumbnail ||
+          null;
+
+        modeS =
+          aircraftInfo.modeS ||
+          null;
+
+        if (
+          aircraftInfo.type
+        ) {
+          if (
+            manufacturer &&
+            !aircraftInfo.type
+              .toUpperCase()
+              .startsWith(
+                manufacturer.toUpperCase()
+              )
+          ) {
+            aircraftName =
+              manufacturer +
+              " " +
+              aircraftInfo.type;
+          }
+          else {
+            aircraftName =
+              aircraftInfo.type;
+          }
+        }
+      }
+
+      if (
+        (
+          !aircraftInfo ||
+          !aircraftInfo.type
+        ) &&
+        enrichment &&
+        enrichment.aircraft &&
+        enrichment.aircraft.name
+      ) {
+        aircraftName =
+          enrichment.aircraft.name;
+      }
 
       // =================================================
       // ROUTE
@@ -348,6 +479,34 @@ module.exports = async function handler(req, res) {
           destination.icao_code ||
           null;
 
+        const originLat =
+          Number.isFinite(
+            Number(origin.latitude)
+          )
+            ? Number(origin.latitude)
+            : null;
+
+        const originLon =
+          Number.isFinite(
+            Number(origin.longitude)
+          )
+            ? Number(origin.longitude)
+            : null;
+
+        const destinationLat =
+          Number.isFinite(
+            Number(destination.latitude)
+          )
+            ? Number(destination.latitude)
+            : null;
+
+        const destinationLon =
+          Number.isFinite(
+            Number(destination.longitude)
+          )
+            ? Number(destination.longitude)
+            : null;
+
         route = {
           found: true,
 
@@ -383,26 +542,10 @@ module.exports = async function handler(req, res) {
               null,
 
             lat:
-              Number.isFinite(
-                Number(
-                  origin.latitude
-                )
-              )
-                ? Number(
-                    origin.latitude
-                  )
-                : null,
+              originLat,
 
             lon:
-              Number.isFinite(
-                Number(
-                  origin.longitude
-                )
-              )
-                ? Number(
-                    origin.longitude
-                  )
-                : null
+              originLon
           },
 
           destination: {
@@ -427,83 +570,34 @@ module.exports = async function handler(req, res) {
               null,
 
             lat:
-              Number.isFinite(
-                Number(
-                  destination.latitude
-                )
-              )
-                ? Number(
-                    destination.latitude
-                  )
-                : null,
+              destinationLat,
 
             lon:
-              Number.isFinite(
-                Number(
-                  destination.longitude
-                )
-              )
-                ? Number(
-                    destination.longitude
-                  )
-                : null
+              destinationLon
           },
 
-          // Already prepared for the future route-map graphic.
           map: {
             start: {
               lat:
-                Number.isFinite(
-                  Number(
-                    origin.latitude
-                  )
-                )
-                  ? Number(
-                      origin.latitude
-                    )
-                  : null,
+                originLat,
 
               lon:
-                Number.isFinite(
-                  Number(
-                    origin.longitude
-                  )
-                )
-                  ? Number(
-                      origin.longitude
-                    )
-                  : null
+                originLon
             },
 
             end: {
               lat:
-                Number.isFinite(
-                  Number(
-                    destination.latitude
-                  )
-                )
-                  ? Number(
-                      destination.latitude
-                    )
-                  : null,
+                destinationLat,
 
               lon:
-                Number.isFinite(
-                  Number(
-                    destination.longitude
-                  )
-                )
-                  ? Number(
-                      destination.longitude
-                    )
-                  : null
+                destinationLon
             }
           }
         };
       }
 
       // =================================================
-      // VIEWER-FRIENDLY STATUS
+      // VIEWER STATUS
       // =================================================
 
       const statusLabels = {
@@ -551,7 +645,7 @@ module.exports = async function handler(req, res) {
         null;
 
       // =================================================
-      // FINAL BROADCAST TARGET
+      // FINAL TARGET
       // =================================================
 
       return {
@@ -566,8 +660,9 @@ module.exports = async function handler(req, res) {
             flightDisplay,
 
           registration:
-            target.registration ||
-            null
+            registration,
+
+          modeS
         },
 
         operator,
@@ -576,7 +671,17 @@ module.exports = async function handler(req, res) {
           typeCode,
 
           name:
-            aircraftName
+            aircraftName,
+
+          manufacturer,
+
+          owner,
+
+          ownerCountry,
+
+          photo,
+
+          thumbnail
         },
 
         route,
@@ -627,7 +732,7 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // BUILD CURRENT / NEXT IN / NEXT OUT
+    // BUILD SELECTIONS
     // =====================================================
 
     const [
@@ -654,9 +759,6 @@ module.exports = async function handler(req, res) {
 
     // =====================================================
     // DISPLAY DIRECTOR
-    //
-    // First simple broadcast-director logic.
-    // We'll make this far cleverer later.
     // =====================================================
 
     let mode =
@@ -675,8 +777,6 @@ module.exports = async function handler(req, res) {
       primaryRole =
         "CURRENT";
 
-      // Route map may eventually appear during
-      // introduction / quieter approach periods.
       showRouteMap =
         Boolean(
           current.route &&
@@ -723,7 +823,7 @@ module.exports = async function handler(req, res) {
           "MikeAircraft Broadcast",
 
         version:
-          "0.3",
+          "0.4",
 
         generatedAt:
           new Date()
@@ -776,9 +876,7 @@ module.exports = async function handler(req, res) {
 
         aircraft: {
           current,
-
           nextIn,
-
           nextOut
         }
       });
@@ -799,7 +897,7 @@ module.exports = async function handler(req, res) {
           "MikeAircraft Broadcast",
 
         version:
-          "0.3",
+          "0.4",
 
         error:
           error.message
