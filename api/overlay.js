@@ -1358,31 +1358,164 @@ function animateAircraftProfile(
    ROUTE MAP
    ===================================================== */
 
+function getRouteBounds(
+  start,
+  end
+) {
+
+  const minLat =
+    Math.min(
+      Number(start.lat),
+      Number(end.lat)
+    );
+
+  const maxLat =
+    Math.max(
+      Number(start.lat),
+      Number(end.lat)
+    );
+
+  const minLon =
+    Math.min(
+      Number(start.lon),
+      Number(end.lon)
+    );
+
+  const maxLon =
+    Math.max(
+      Number(start.lon),
+      Number(end.lon)
+    );
+
+
+  let latSpan =
+    maxLat - minLat;
+
+  let lonSpan =
+    maxLon - minLon;
+
+
+  // Prevent tiny routes like CDG -> LHR
+  // collapsing into a tiny corner.
+
+  latSpan =
+    Math.max(
+      latSpan,
+      3.5
+    );
+
+  lonSpan =
+    Math.max(
+      lonSpan,
+      5
+    );
+
+
+  const latPadding =
+    latSpan *
+    0.55;
+
+
+  const lonPadding =
+    lonSpan *
+    0.55;
+
+
+  return {
+
+    minLat:
+      minLat -
+      latPadding,
+
+    maxLat:
+      maxLat +
+      latPadding,
+
+    minLon:
+      minLon -
+      lonPadding,
+
+    maxLon:
+      maxLon +
+      lonPadding
+
+  };
+
+}
+
+
 function mapProjection(
   lat,
   lon,
   width,
-  height
+  height,
+  bounds
 ) {
 
+  const usableLeft =
+    width *
+    0.08;
+
+  const usableRight =
+    width *
+    0.92;
+
+  const usableTop =
+    height *
+    0.28;
+
+  const usableBottom =
+    height *
+    0.83;
+
+
+  const usableWidth =
+    usableRight -
+    usableLeft;
+
+  const usableHeight =
+    usableBottom -
+    usableTop;
+
+
+  const lonSpan =
+    bounds.maxLon -
+    bounds.minLon;
+
+
+  const latSpan =
+    bounds.maxLat -
+    bounds.minLat;
+
+
   const x =
+    usableLeft
+    +
     (
-      lon + 180
+      (
+        lon -
+        bounds.minLon
+      )
+      /
+      lonSpan
     )
-    /
-    360
     *
-    width;
+    usableWidth;
 
 
   const y =
+    usableTop
+    +
     (
-      90 - lat
+      (
+        bounds.maxLat -
+        lat
+      )
+      /
+      latSpan
     )
-    /
-    180
     *
-    height;
+    usableHeight;
 
 
   return {
@@ -1427,14 +1560,32 @@ function showRouteMap(
 
 
   routeData = {
+
     start,
-    end
+
+    end,
+
+    originCode:
+      target.route.origin?.iata
+      ||
+      target.route.origin?.icao
+      ||
+      "",
+
+    destinationCode:
+      target.route.destination?.iata
+      ||
+      target.route.destination?.icao
+      ||
+      ""
+
   };
 
 
   setText(
     "routeMapRoute",
-    target.route.display ||
+    target.route.display
+    ||
     ""
   );
 
@@ -1457,8 +1608,10 @@ function showRouteMap(
 
   setText(
     "routeMapCities",
-    originCity +
-    "  →  " +
+    originCity
+    +
+    "  →  "
+    +
     destinationCity
   );
 
@@ -1531,16 +1684,35 @@ function drawRouteMap() {
     card.clientHeight;
 
 
-  canvas.width =
+  const pixelWidth =
     Math.round(
-      width * dpr
+      width *
+      dpr
     );
 
 
-  canvas.height =
+  const pixelHeight =
     Math.round(
-      height * dpr
+      height *
+      dpr
     );
+
+
+  if (
+    canvas.width !==
+    pixelWidth
+    ||
+    canvas.height !==
+    pixelHeight
+  ) {
+
+    canvas.width =
+      pixelWidth;
+
+    canvas.height =
+      pixelHeight;
+
+  }
 
 
   const ctx =
@@ -1567,30 +1739,57 @@ function drawRouteMap() {
   );
 
 
-  /* World-style graticule */
+  if (!routeData) {
+
+    requestAnimationFrame(
+      drawRouteMap
+    );
+
+    return;
+
+  }
+
+
+  const bounds =
+    getRouteBounds(
+      routeData.start,
+      routeData.end
+    );
+
+
+  /* ==========================================
+     BACKGROUND GRID
+     ========================================== */
+
 
   ctx.strokeStyle =
-    "rgba(100,190,220,0.12)";
+    "rgba(90,180,215,0.10)";
 
 
   ctx.lineWidth =
     1;
 
 
+  const gridColumns =
+    6;
+
+
+  const gridRows =
+    4;
+
+
   for (
-    let lon = -150;
-    lon <= 150;
-    lon += 30
+    let i = 1;
+    i < gridColumns;
+    i++
   ) {
 
     const x =
+      width *
       (
-        lon + 180
-      )
-      /
-      360
-      *
-      width;
+        i /
+        gridColumns
+      );
 
 
     ctx.beginPath();
@@ -1611,19 +1810,17 @@ function drawRouteMap() {
 
 
   for (
-    let lat = -60;
-    lat <= 60;
-    lat += 30
+    let i = 1;
+    i < gridRows;
+    i++
   ) {
 
     const y =
+      height *
       (
-        90 - lat
-      )
-      /
-      180
-      *
-      height;
+        i /
+        gridRows
+      );
 
 
     ctx.beginPath();
@@ -1643,36 +1840,9 @@ function drawRouteMap() {
   }
 
 
-  /* stylised equator */
-
-  ctx.strokeStyle =
-    "rgba(90,205,240,0.17)";
-
-
-  ctx.beginPath();
-
-  ctx.moveTo(
-    0,
-    height / 2
-  );
-
-  ctx.lineTo(
-    width,
-    height / 2
-  );
-
-  ctx.stroke();
-
-
-  if (!routeData) {
-
-    requestAnimationFrame(
-      drawRouteMap
-    );
-
-    return;
-
-  }
+  /* ==========================================
+     START / END
+     ========================================== */
 
 
   const start =
@@ -1684,7 +1854,8 @@ function drawRouteMap() {
         routeData.start.lon
       ),
       width,
-      height
+      height,
+      bounds
     );
 
 
@@ -1697,7 +1868,26 @@ function drawRouteMap() {
         routeData.end.lon
       ),
       width,
-      height
+      height,
+      bounds
+    );
+
+
+  const dx =
+    end.x -
+    start.x;
+
+
+  const dy =
+    end.y -
+    start.y;
+
+
+  const routeLength =
+    Math.sqrt(
+      dx * dx
+      +
+      dy * dy
     );
 
 
@@ -1710,37 +1900,65 @@ function drawRouteMap() {
     2;
 
 
-  const distanceX =
-    Math.abs(
-      end.x -
-      start.x
-    );
+  const midY =
+    (
+      start.y +
+      end.y
+    )
+    /
+    2;
 
 
-  const curveHeight =
-    Math.max(
-      30,
-      Math.min(
-        100,
-        distanceX *
-        0.35
+  const normalX =
+    routeLength > 0
+      ? (
+          -dy /
+          routeLength
+        )
+      : 0;
+
+
+  const normalY =
+    routeLength > 0
+      ? (
+          dx /
+          routeLength
+        )
+      : -1;
+
+
+  const bend =
+    Math.min(
+      85,
+      Math.max(
+        35,
+        routeLength *
+        0.28
       )
     );
 
 
+  const controlX =
+    midX
+    +
+    normalX *
+    bend;
+
+
   const controlY =
-    Math.min(
-      start.y,
-      end.y
-    )
-    -
-    curveHeight;
+    midY
+    +
+    normalY *
+    bend;
 
 
-  /* full route */
+  /* ==========================================
+     BASE ROUTE
+     ========================================== */
+
 
   ctx.strokeStyle =
-    "rgba(85,215,255,0.28)";
+    "rgba(94,205,245,0.24)";
 
 
   ctx.lineWidth =
@@ -1756,7 +1974,7 @@ function drawRouteMap() {
 
 
   ctx.quadraticCurveTo(
-    midX,
+    controlX,
     controlY,
     end.x,
     end.y
@@ -1766,7 +1984,10 @@ function drawRouteMap() {
   ctx.stroke();
 
 
-  /* animated route */
+  /* ==========================================
+     ANIMATED ROUTE
+     ========================================== */
+
 
   let progress =
     1;
@@ -1792,7 +2013,7 @@ function drawRouteMap() {
 
 
   const steps =
-    70;
+    90;
 
 
   const visibleSteps =
@@ -1803,7 +2024,7 @@ function drawRouteMap() {
 
 
   ctx.strokeStyle =
-    "rgba(101,225,255,0.95)";
+    "rgba(100,225,255,0.96)";
 
 
   ctx.lineWidth =
@@ -1813,6 +2034,14 @@ function drawRouteMap() {
   ctx.beginPath();
 
 
+  let markerX =
+    start.x;
+
+
+  let markerY =
+    start.y;
+
+
   for (
     let i = 0;
     i <= visibleSteps;
@@ -1820,11 +2049,13 @@ function drawRouteMap() {
   ) {
 
     const t =
-      i / steps;
+      i /
+      steps;
 
 
     const oneMinus =
-      1 - t;
+      1 -
+      t;
 
 
     const x =
@@ -1835,7 +2066,7 @@ function drawRouteMap() {
       2 *
       oneMinus *
       t *
-      midX
+      controlX
       +
       t *
       t *
@@ -1857,7 +2088,16 @@ function drawRouteMap() {
       end.y;
 
 
-    if (i === 0) {
+    markerX =
+      x;
+
+    markerY =
+      y;
+
+
+    if (
+      i === 0
+    ) {
 
       ctx.moveTo(
         x,
@@ -1881,7 +2121,10 @@ function drawRouteMap() {
   ctx.stroke();
 
 
-  /* origin */
+  /* ==========================================
+     ORIGIN MARKER
+     ========================================== */
+
 
   ctx.fillStyle =
     "#5ee2ff";
@@ -1892,15 +2135,48 @@ function drawRouteMap() {
   ctx.arc(
     start.x,
     start.y,
-    4,
+    5,
     0,
-    Math.PI * 2
+    Math.PI *
+    2
   );
 
   ctx.fill();
 
 
-  /* destination */
+  ctx.fillStyle =
+    "rgba(200,240,255,0.96)";
+
+
+  ctx.font =
+    "bold "
+    +
+    Math.max(
+      10,
+      width *
+      0.03
+    )
+    +
+    "px Arial";
+
+
+  ctx.textAlign =
+    "left";
+
+
+  ctx.fillText(
+    routeData.originCode,
+    start.x +
+    9,
+    start.y -
+    7
+  );
+
+
+  /* ==========================================
+     DESTINATION MARKER
+     ========================================== */
+
 
   ctx.fillStyle =
     "#ffffff";
@@ -1911,58 +2187,41 @@ function drawRouteMap() {
   ctx.arc(
     end.x,
     end.y,
-    5,
+    6,
     0,
-    Math.PI * 2
+    Math.PI *
+    2
   );
 
   ctx.fill();
 
 
-  /* moving aircraft marker */
+  ctx.fillStyle =
+    "#ffffff";
+
+
+  ctx.textAlign =
+    "right";
+
+
+  ctx.fillText(
+    routeData.destinationCode,
+    end.x -
+    9,
+    end.y -
+    7
+  );
+
+
+  /* ==========================================
+     MOVING AIRCRAFT DOT
+     ========================================== */
+
 
   if (
     progress <
     1
   ) {
-
-    const t =
-      progress;
-
-
-    const oneMinus =
-      1 - t;
-
-
-    const x =
-      oneMinus *
-      oneMinus *
-      start.x
-      +
-      2 *
-      oneMinus *
-      t *
-      midX
-      +
-      t *
-      t *
-      end.x;
-
-
-    const y =
-      oneMinus *
-      oneMinus *
-      start.y
-      +
-      2 *
-      oneMinus *
-      t *
-      controlY
-      +
-      t *
-      t *
-      end.y;
-
 
     ctx.fillStyle =
       "#ffca57";
@@ -1971,14 +2230,37 @@ function drawRouteMap() {
     ctx.beginPath();
 
     ctx.arc(
-      x,
-      y,
-      4.5,
+      markerX,
+      markerY,
+      5,
       0,
-      Math.PI * 2
+      Math.PI *
+      2
     );
 
     ctx.fill();
+
+
+    ctx.strokeStyle =
+      "rgba(255,202,87,0.45)";
+
+
+    ctx.lineWidth =
+      2;
+
+
+    ctx.beginPath();
+
+    ctx.arc(
+      markerX,
+      markerY,
+      9,
+      0,
+      Math.PI *
+      2
+    );
+
+    ctx.stroke();
 
   }
 
