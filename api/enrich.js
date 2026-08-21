@@ -1,6 +1,6 @@
 // MikeAircraft Enrichment Service
 // Version 0.2
-// trigger deploy
+// deploy v0.2
 // Airline/operator + friendly aircraft type names
 
 module.exports = async function handler(req, res) {
