@@ -1,12 +1,8 @@
 // MikeAircraft Livestream Overlay
-// Version 0.2
+// Version 0.3
 //
-// Responsive broadcast overlay preview.
-// Reads Broadcast API v0.4.
-//
-// NOTE:
-// Background is temporarily dark for development.
-// Later we switch it to transparent for YoloBox.
+// Adds animated aircraft-profile reveal on CURRENT change.
+// Reads Broadcast API v0.5.
 
 module.exports = async function handler(req, res) {
   res.setHeader(
@@ -31,7 +27,7 @@ module.exports = async function handler(req, res) {
     content="width=device-width, initial-scale=1.0"
   >
 
-  <title>MikeAircraft Overlay v0.2</title>
+  <title>MikeAircraft Overlay v0.3</title>
 
   <style>
 
@@ -63,6 +59,58 @@ module.exports = async function handler(req, res) {
     }
 
     /* ============================================
+       AIRCRAFT PROFILE
+       ============================================ */
+
+    .aircraft-profile-wrap {
+      position: absolute;
+
+      left: 5.5vw;
+      bottom: calc(5vh + 176px);
+
+      width: min(36vw, 650px);
+      height: 220px;
+
+      overflow: hidden;
+
+      pointer-events: none;
+    }
+
+    .aircraft-profile {
+      position: absolute;
+
+      left: 0;
+      bottom: -175px;
+
+      width: 100%;
+      height: auto;
+
+      opacity: 0;
+
+      transform:
+        translateY(0);
+
+      transition:
+        bottom 0.65s cubic-bezier(
+          0.22,
+          0.82,
+          0.25,
+          1
+        ),
+        opacity 0.35s ease;
+    }
+
+    .aircraft-profile.rise {
+      bottom: -28px;
+      opacity: 1;
+    }
+
+    .aircraft-profile.settle {
+      bottom: -110px;
+      opacity: 0.92;
+    }
+
+    /* ============================================
        LOWER THIRD
        ============================================ */
 
@@ -91,6 +139,8 @@ module.exports = async function handler(req, res) {
     }
 
     .main-ribbon {
+      position: relative;
+
       display: grid;
 
       grid-template-columns:
@@ -579,6 +629,15 @@ module.exports = async function handler(req, res) {
       max-width: 900px
     ) {
 
+      .aircraft-profile-wrap {
+        left: 5vw;
+        width: 70vw;
+        bottom:
+          calc(
+            20vh + 145px
+          );
+      }
+
       .lower-third {
         left: 3vw;
         right: 3vw;
@@ -622,7 +681,20 @@ module.exports = async function handler(req, res) {
 <div class="overlay">
 
   <div class="dev-badge">
-    MikeAircraft Overlay v0.2 • PREVIEW
+    MikeAircraft Overlay v0.3 • PREVIEW
+  </div>
+
+
+  <div
+    class="aircraft-profile-wrap"
+  >
+
+    <img
+      id="aircraftProfile"
+      class="aircraft-profile"
+      alt=""
+    >
+
   </div>
 
 
@@ -823,6 +895,15 @@ module.exports = async function handler(req, res) {
   let busy =
     false;
 
+  let lastCurrentKey =
+    null;
+
+  let profileTimer1 =
+    null;
+
+  let profileTimer2 =
+    null;
+
 
   function setText(
     id,
@@ -838,6 +919,117 @@ module.exports = async function handler(req, res) {
       el.textContent =
         value;
     }
+
+  }
+
+
+  function animateAircraftProfile(
+    target
+  ) {
+
+    if (
+      !target ||
+      !target.available
+    ) {
+      return;
+    }
+
+
+    const typeCode =
+      target.aircraft?.typeCode ||
+      "";
+
+    if (!typeCode) {
+      return;
+    }
+
+
+    const lineage =
+      target.movement?.lineage;
+
+
+    const direction =
+      lineage === "ARRIVAL"
+        ? "RIGHT"
+        : lineage === "DEPARTURE"
+          ? "LEFT"
+          : "RIGHT";
+
+
+    const profile =
+      document.getElementById(
+        "aircraftProfile"
+      );
+
+
+    clearTimeout(
+      profileTimer1
+    );
+
+    clearTimeout(
+      profileTimer2
+    );
+
+
+    profile.classList.remove(
+      "rise",
+      "settle"
+    );
+
+
+    profile.src =
+      "/api/aircraft-graphic?type=" +
+      encodeURIComponent(
+        typeCode
+      )
+      +
+      "&direction=" +
+      encodeURIComponent(
+        direction
+      )
+      +
+      "&t=" +
+      Date.now();
+
+
+    // Force reflow so the animation
+    // restarts even if the same family appears.
+    void profile.offsetWidth;
+
+
+    profile.classList.add(
+      "rise"
+    );
+
+
+    profileTimer1 =
+      setTimeout(
+        () => {
+
+          profile.classList.remove(
+            "rise"
+          );
+
+          profile.classList.add(
+            "settle"
+          );
+
+        },
+        3600
+      );
+
+
+    profileTimer2 =
+      setTimeout(
+        () => {
+
+          profile.classList.remove(
+            "settle"
+          );
+
+        },
+        7200
+      );
 
   }
 
@@ -976,6 +1168,34 @@ module.exports = async function handler(req, res) {
     box.classList.add(
       "visible"
     );
+
+
+    const currentKey =
+      (
+        target.identity
+          ?.registration
+        ||
+        target.identity
+          ?.callsign
+        ||
+        ""
+      );
+
+
+    if (
+      currentKey &&
+      currentKey !==
+      lastCurrentKey
+    ) {
+
+      lastCurrentKey =
+        currentKey;
+
+      animateAircraftProfile(
+        target
+      );
+
+    }
 
   }
 
