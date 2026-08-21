@@ -18,10 +18,10 @@ module.exports = async function handler(req, res) {
   try {
     // =====================================================
     // MIKEAIRCRAFT ENGINE v2
-    // Version 0.6
+    // Version 0.7
     //
-    // Stage 5:
-    // Movement lineage + taxi intent
+    // Stage 6:
+    // Movement lineage + confidence-gated CURRENT selection
     // =====================================================
 
     const AIRPORTS = {
@@ -600,9 +600,9 @@ module.exports = async function handler(req, res) {
           engine:
             "MikeAircraft Engine v2",
           version:
-            "0.6",
+            "0.7",
           stage:
-            "MOVEMENT_LINEAGE",
+            "SELECTION_CONFIDENCE",
           error:
             "All ADS-B sources failed",
           sourceErrors,
@@ -624,9 +624,9 @@ module.exports = async function handler(req, res) {
         engine:
           "MikeAircraft Engine v2",
         version:
-          "0.6",
+          "0.7",
         stage:
-          "MOVEMENT_LINEAGE",
+          "SELECTION_CONFIDENCE",
         dataStatus:
           "STALE",
         staleAgeSeconds:
@@ -680,7 +680,15 @@ module.exports = async function handler(req, res) {
                 stateCounts: {},
                 current: null,
                 nextIn: null,
-                nextOut: null
+                nextOut: null,
+                selectionConfidence: {
+                  level: "NONE",
+                  score: 0,
+                  ambiguous: true,
+                  scoreMargin: null,
+                  candidateCount: 0,
+                  storySafe: false
+                }
               },
 
         aircraft:
@@ -992,7 +1000,6 @@ module.exports = async function handler(req, res) {
         !prior.onGround &&
         ac.onGround;
 
-      // ARRIVAL LINEAGE STAYS ARRIVAL ON THE GROUND
       if (ac.onGround) {
         if (
           justLanded ||
@@ -1393,6 +1400,9 @@ module.exports = async function handler(req, res) {
         id:
           ac.id,
 
+        hex:
+          ac.hex,
+
         callsign:
           ac.callsign,
 
@@ -1414,6 +1424,11 @@ module.exports = async function handler(req, res) {
         runway:
           ac.nearestRunway,
 
+        runwayAlignment:
+          Number.isFinite(ac.runwayAlignment)
+            ? Number(ac.runwayAlignment.toFixed(1))
+            : null,
+
         distanceKm:
           Number(
             ac.airportDistance.toFixed(2)
@@ -1430,29 +1445,56 @@ module.exports = async function handler(req, res) {
         speed:
           ac.speed,
 
+        positionAge:
+          ac.positionAge,
+
         stateAgeSeconds:
           ac.stateAgeSeconds,
+
+        sampleCount:
+          ac.sampleCount,
 
         score
       };
     }
 
     // =====================================================
-    // CURRENT
+    // CURRENT — CONFIDENCE-GATED CAMERA CANDIDATE
     // =====================================================
 
     function currentScore(ac) {
       const stateBase = {
-        TAKEOFF_ROLL: 1100,
-        AIRBORNE_DEPARTURE: 1050,
-        ON_FINAL: 1020,
-        LANDED: 950,
-        DEPARTING: 920,
-        APPROACHING: 880,
-        LINING_UP: 830
+        TAKEOFF_ROLL: 1160,
+        AIRBORNE_DEPARTURE: 1110,
+        ON_FINAL: 1080,
+        DEPARTING: 930,
+        APPROACHING: 900,
+        LINING_UP: 850,
+        LANDED: 780
       };
 
       if (!(ac.state in stateBase)) {
+        return -Infinity;
+      }
+
+      // Do not promote weak classifications to CURRENT.
+      if ((ac.confidence || 0) < 78) {
+        return -Infinity;
+      }
+
+      // Stale positions are dangerous for camera identification.
+      if (
+        ac.positionAge !== null &&
+        ac.positionAge > 12
+      ) {
+        return -Infinity;
+      }
+
+      // Once an arrival has completed its rollout, it must hand over.
+      if (
+        ac.state === "LANDED" &&
+        ac.stateAgeSeconds > 12
+      ) {
         return -Infinity;
       }
 
@@ -1469,12 +1511,41 @@ module.exports = async function handler(req, res) {
       score +=
         Math.max(
           0,
-          160 -
-          ac.airportDistance * 18
+          180 -
+          ac.airportDistance * 20
         );
 
       score +=
-        (ac.confidence || 0) * 1.2;
+        (ac.confidence || 0) * 1.35;
+
+      score +=
+        Math.min(
+          55,
+          (ac.sampleCount || 0) * 5
+        );
+
+      if (
+        ac.positionAge !== null
+      ) {
+        score +=
+          Math.max(
+            0,
+            36 -
+            ac.positionAge * 6
+          );
+      }
+
+      if (
+        ac.state === "ON_FINAL" ||
+        ac.state === "APPROACHING"
+      ) {
+        score +=
+          Math.max(
+            0,
+            120 -
+            ac.runwayAlignment * 4
+          );
+      }
 
       if (
         ac.state === "ON_FINAL"
@@ -1482,22 +1553,29 @@ module.exports = async function handler(req, res) {
         score +=
           Math.max(
             0,
-            140 -
-            ac.thresholdDistance * 18
+            170 -
+            ac.thresholdDistance * 21
           );
       }
 
       if (
         ac.state === "TAKEOFF_ROLL"
       ) {
-        score += 180;
+        score += 210;
       }
 
       if (
         ac.state ===
           "AIRBORNE_DEPARTURE"
       ) {
-        score += 150;
+        score += 180;
+      }
+
+      if (
+        ac.registration &&
+        ac.hex
+      ) {
+        score += 22;
       }
 
       return score;
@@ -1515,6 +1593,7 @@ module.exports = async function handler(req, res) {
           ac =>
             ac.id !== excludeId &&
             ac.lineage === "ARRIVAL" &&
+            ac.confidence >= 78 &&
             [
               "ON_FINAL",
               "APPROACHING"
@@ -1619,6 +1698,12 @@ module.exports = async function handler(req, res) {
             }
 
             if (
+              ac.confidence < 74
+            ) {
+              return false;
+            }
+
+            if (
               ![
                 "TAKEOFF_ROLL",
                 "LINING_UP",
@@ -1648,7 +1733,7 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // CURRENT SELECTION WITH PERSISTENCE
+    // CURRENT SELECTION WITH PERSISTENCE + AMBIGUITY GATE
     // =====================================================
 
     const selection =
@@ -1685,6 +1770,9 @@ module.exports = async function handler(req, res) {
     const challenger =
       scored[0] || null;
 
+    const runnerUp =
+      scored[1] || null;
+
     const existingCurrent =
       selection.currentId
         ? classified.find(
@@ -1708,10 +1796,10 @@ module.exports = async function handler(req, res) {
         : Infinity;
 
     const MIN_CURRENT_HOLD_MS =
-      20000;
+      12000;
 
     const SWITCH_MARGIN =
-      120;
+      85;
 
     let current =
       existingCurrent;
@@ -1737,11 +1825,16 @@ module.exports = async function handler(req, res) {
         challenger.ac.state ===
           "TAKEOFF_ROLL" ||
         challenger.ac.state ===
-          "AIRBORNE_DEPARTURE"
+          "AIRBORNE_DEPARTURE" ||
+        current.state === "LANDED"
       ) &&
       challenger.score >
         existingScore +
-        SWITCH_MARGIN
+        (
+          current.state === "LANDED"
+            ? 20
+            : SWITCH_MARGIN
+        )
     ) {
       current =
         challenger.ac;
@@ -1772,6 +1865,101 @@ module.exports = async function handler(req, res) {
         ? current.id
         : null;
 
+    const currentRank =
+      currentId
+        ? scored.findIndex(
+            item =>
+              item.ac.id === currentId
+          )
+        : -1;
+
+    const currentScoredItem =
+      currentRank >= 0
+        ? scored[currentRank]
+        : null;
+
+    const bestCompetingItem =
+      currentId
+        ? scored.find(
+            item =>
+              item.ac.id !== currentId
+          ) || null
+        : runnerUp;
+
+    const scoreMargin =
+      currentScoredItem &&
+      bestCompetingItem
+        ? Math.round(
+            currentScoredItem.score -
+            bestCompetingItem.score
+          )
+        : currentScoredItem
+          ? 999
+          : null;
+
+    let selectionScore = 0;
+
+    if (current) {
+      selectionScore =
+        Math.round(
+          Math.max(
+            0,
+            Math.min(
+              100,
+              (current.confidence || 0) * 0.62 +
+              Math.max(
+                0,
+                Math.min(25, (scoreMargin || 0) / 5)
+              ) +
+              Math.min(8, (current.sampleCount || 0)) +
+              (
+                current.registration && current.hex
+                  ? 6
+                  : 0
+              ) -
+              (
+                current.positionAge !== null
+                  ? Math.min(18, current.positionAge * 2)
+                  : 6
+              )
+            )
+          )
+        );
+    }
+
+    const ambiguous =
+      !current ||
+      scoreMargin === null ||
+      scoreMargin < 70 ||
+      selectionScore < 82;
+
+    const selectionLevel =
+      !current
+        ? "NONE"
+        : selectionScore >= 93 &&
+          scoreMargin >= 120
+          ? "VERY_HIGH"
+          : selectionScore >= 86 &&
+            scoreMargin >= 80
+            ? "HIGH"
+            : selectionScore >= 76
+              ? "MEDIUM"
+              : "LOW";
+
+    const storySafe =
+      Boolean(
+        current &&
+        selectionLevel === "VERY_HIGH" &&
+        current.registration &&
+        current.hex &&
+        current.sampleCount >= 3 &&
+        (
+          current.positionAge === null ||
+          current.positionAge <= 5
+        ) &&
+        current.state !== "LANDED"
+      );
+
     const nextIn =
       arrivalCandidates(
         currentId
@@ -1784,6 +1972,23 @@ module.exports = async function handler(req, res) {
 
     const intelligence = {
       stateCounts,
+
+      selectionConfidence: {
+        level:
+          selectionLevel,
+
+        score:
+          selectionScore,
+
+        ambiguous,
+
+        scoreMargin,
+
+        candidateCount:
+          scored.length,
+
+        storySafe
+      },
 
       current:
         displayObject(
@@ -1864,10 +2069,10 @@ module.exports = async function handler(req, res) {
         "MikeAircraft Engine v2",
 
       version:
-        "0.6",
+        "0.7",
 
       stage:
-        "MOVEMENT_LINEAGE",
+        "SELECTION_CONFIDENCE",
 
       dataStatus:
         "LIVE",
@@ -1944,10 +2149,10 @@ module.exports = async function handler(req, res) {
         "MikeAircraft Engine v2",
 
       version:
-        "0.6",
+        "0.7",
 
       stage:
-        "MOVEMENT_LINEAGE",
+        "SELECTION_CONFIDENCE",
 
       error:
         error.message
