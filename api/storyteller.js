@@ -1,10 +1,11 @@
 // MikeAircraft Storyteller API
-// Version 0.3
-// Production sync 2026-08-22
+// Version 0.4
 //
 // Produces short, grounded viewer-friendly story copy from live MikeAircraft
 // data. Aircraft-specific copy is only allowed when the Director's identity
-// gate is strong enough. No invented anecdotes and no speculative routes.
+// gate is strong enough. When the overlay supplies a target CURRENT identity,
+// Storyteller will only speak about that same aircraft and will stay silent on
+// any mismatch. No invented anecdotes and no speculative routes.
 
 const engineHandler = require("./engine.js");
 const broadcastHandler = require("./broadcast.js");
@@ -20,6 +21,10 @@ module.exports = async function handler(req, res) {
 
   try {
     const airport = String((req.query && req.query.airport) || "PRG").trim().toUpperCase();
+    const targetRegistration = String((req.query && req.query.registration) || "").trim().toUpperCase();
+    const targetCallsign = String((req.query && req.query.callsign) || "").trim().toUpperCase();
+    const targetLocked = Boolean(targetRegistration || targetCallsign);
+
     const airportIds = {
       PRG:{ iata:"PRG", icao:"LKPR" }, LHR:{ iata:"LHR", icao:"EGLL" },
       FRA:{ iata:"FRA", icao:"EDDF" }, AMS:{ iata:"AMS", icao:"EHAM" },
@@ -61,15 +66,28 @@ module.exports = async function handler(req, res) {
     const operator = current && current.operator ? current.operator : {};
     const telemetry = current && current.telemetry ? current.telemetry : {};
 
+    const currentRegistration = String(identity.registration || "").trim().toUpperCase();
+    const currentCallsign = String(identity.callsign || "").trim().toUpperCase();
+    const targetMatches = !targetLocked ||
+      (targetRegistration && currentRegistration && targetRegistration === currentRegistration) ||
+      (targetCallsign && currentCallsign && targetCallsign === currentCallsign);
+
+    if (targetLocked && !targetMatches) {
+      return res.status(200).json({
+        ok:true, service:"MikeAircraft Storyteller", version:"0.4", generatedAt:new Date().toISOString(), airport:broadcast.airport || {code:airport},
+        gate:{ passed:false, selectionLevel:selection.level || "NONE", selectionScore:selection.score ?? 0, storySafe:false, registrationPresent:Boolean(identity.registration), modeSPresent:Boolean(identity.modeS), movementConfidence:movement.confidence ?? null, fallbackUsed:false, targetLocked:true, targetMatched:false, routeGuard:{checked:false,accepted:false,reason:"CURRENT changed before Storyteller evaluation"} },
+        output:{ available:false, class:"SILENT_CURRENT_MISMATCH", confidence:0, story:null, facts:[], sources:[] }
+      });
+    }
+
     const identityStrong = Boolean(current && selection.storySafe === true && selection.level === "VERY_HIGH" && identity.registration && identity.modeS && Number(movement.confidence || 0) >= 90);
     const sources = [], facts = [];
-    let story = null, storyClass = "SILENT", confidence = 0, fallbackCandidate = null, routeGuard = { checked:false, accepted:false, reason:"No route evaluated" };
+    let story = null, storyClass = "SILENT", confidence = 0, routeGuard = { checked:false, accepted:false, reason:"No route evaluated" };
 
     function pushSource(source, detail) {
       if (!sources.some(s => s.source === source && s.detail === detail)) sources.push({ source, detail });
     }
     function cleanName(value) { return value ? String(value).replace(/\s+/g, " ").trim() : null; }
-    function finiteNumber(value) { const n = Number(value); return Number.isFinite(n) ? n : null; }
     function endpointMatchesLocal(endpoint) {
       const local = airportIds[airport];
       if (!local || !endpoint) return false;
@@ -87,27 +105,6 @@ module.exports = async function handler(req, res) {
         ? { checked:true, accepted:true, reason:"Departure origin matches live airport" }
         : { checked:true, accepted:false, reason:"Departure origin conflicts with live airport" };
       return { checked:true, accepted:false, reason:"Movement lineage is not certain enough to validate route" };
-    }
-
-    function chooseInstantaneousContext(list) {
-      if (!Array.isArray(list)) return null;
-      const candidates = [];
-      for (const ac of list) {
-        const age=finiteNumber(ac.positionAge), alignment=finiteNumber(ac.runwayAlignment), threshold=finiteNumber(ac.thresholdDistance), runwayDistance=finiteNumber(ac.runwayDistance), altitude=finiteNumber(ac.altitude), speed=finiteNumber(ac.speed);
-        if (!ac.type || age === null || age > 5) continue;
-        const strongFinalGeometry = !ac.onGround && alignment !== null && alignment <= 12 && threshold !== null && threshold <= 8 && altitude !== null && altitude <= 3500;
-        const strongRunwayGeometry = ac.onGround && runwayDistance !== null && runwayDistance <= 0.22 && speed !== null && speed >= 35;
-        if (!strongFinalGeometry && !strongRunwayGeometry) continue;
-        let score=0;
-        if (strongRunwayGeometry) score+=120;
-        if (strongFinalGeometry) score+=100;
-        if (threshold !== null) score+=Math.max(0,40-threshold*5);
-        score+=Math.max(0,15-age*3);
-        if (alignment !== null) score+=Math.max(0,20-alignment);
-        candidates.push({ ac, score, context:strongRunwayGeometry ? "RUNWAY_ACTIVITY" : "FINAL_APPROACH_GEOMETRY" });
-      }
-      candidates.sort((a,b)=>b.score-a.score);
-      return candidates[0] || null;
     }
 
     if (identityStrong) {
@@ -150,35 +147,22 @@ module.exports = async function handler(req, res) {
       storyClass=routeOK ? "VERIFIED_FLIGHT_STORY" : "VERIFIED_AIRCRAFT_STORY";
       confidence=Math.max(93,Math.min(100,Number(selection.score || 93)));
     } else if (current && aircraft.typeCode) {
-      const typeName=cleanName(aircraft.name || aircraft.typeCode), status=cleanName(movement.displayState || movement.state);
-      story={ headline:typeName || "Live airport activity", text:status ? `MikeAircraft is tracking ${typeName || "an aircraft"} ${status.toLowerCase()}, but identity confidence is not yet high enough for an aircraft-specific story.` : `MikeAircraft is tracking ${typeName || "an aircraft"}, but identity confidence is not yet high enough for an aircraft-specific story.`, tone:"viewer-friendly", specificAircraft:false };
-      storyClass="GENERIC_SAFE_CONTEXT";
+      const typeName=cleanName(aircraft.name || aircraft.typeCode), status=cleanName(movement.displayState || movement.state), lineage=cleanName(movement.lineage);
+      const direction = lineage === "ARRIVAL" ? "arriving" : lineage === "DEPARTURE" ? "departing" : status ? status.toLowerCase() : "in live airport activity";
+      story={ headline:typeName || "Live airport activity", text:`${typeName || "Aircraft"} ${direction}${movement.runway ? ` on runway ${movement.runway}` : ""}.`, tone:"viewer-friendly", specificAircraft:false };
+      storyClass="GENERIC_CURRENT_CONTEXT";
       confidence=Math.max(40,Math.min(75,Number(selection.score || 50)));
       facts.push({label:"reportedType",value:typeName});
-      pushSource("MikeAircraft Director", `identity gate not passed (${selection.level || "NONE"})`);
-    } else {
-      fallbackCandidate=chooseInstantaneousContext(engine.aircraft);
-      if (fallbackCandidate) {
-        const ac=fallbackCandidate.ac, typeName=cleanName(ac.type) || "aircraft", runway=cleanName(ac.nearestRunway), onRunway=fallbackCandidate.context === "RUNWAY_ACTIVITY";
-        const activity=onRunway ? `moving rapidly close to${runway ? " runway "+runway : " a runway"}` : `aligned close to${runway ? " runway "+runway : " a runway"}`;
-        story={ headline:"Live airport activity", text:`MikeAircraft is tracking a ${typeName} ${activity}. The live geometry is clear, but identity confidence is not yet high enough for an aircraft-specific story.`, tone:"viewer-friendly", specificAircraft:false };
-        storyClass="GENERIC_SAFE_CONTEXT";
-        confidence=onRunway ? 70 : 65;
-        facts.push({label:"reportedType",value:typeName});
-        if (runway) facts.push({label:"nearestRunway",value:runway});
-        if (ac.thresholdDistance != null) facts.push({label:"thresholdDistanceKm",value:Number(Number(ac.thresholdDistance).toFixed(2))});
-        pushSource("Live ADS-B","instantaneous position and reported type");
-        pushSource("MikeAircraft geometry",fallbackCandidate.context);
-      }
+      pushSource("MikeAircraft Director", `CURRENT identity gate not passed (${selection.level || "NONE"})`);
     }
 
     return res.status(200).json({
-      ok:true, service:"MikeAircraft Storyteller", version:"0.3", generatedAt:new Date().toISOString(), airport:broadcast.airport || {code:airport},
-      gate:{ passed:identityStrong, selectionLevel:selection.level || "NONE", selectionScore:selection.score ?? 0, storySafe:selection.storySafe === true, registrationPresent:Boolean(identity.registration), modeSPresent:Boolean(identity.modeS), movementConfidence:movement.confidence ?? null, fallbackUsed:Boolean(fallbackCandidate), routeGuard },
+      ok:true, service:"MikeAircraft Storyteller", version:"0.4", generatedAt:new Date().toISOString(), airport:broadcast.airport || {code:airport},
+      gate:{ passed:identityStrong, selectionLevel:selection.level || "NONE", selectionScore:selection.score ?? 0, storySafe:selection.storySafe === true, registrationPresent:Boolean(identity.registration), modeSPresent:Boolean(identity.modeS), movementConfidence:movement.confidence ?? null, fallbackUsed:false, targetLocked, targetMatched:true, routeGuard },
       output:{ available:Boolean(story), class:storyClass, confidence, story, facts, sources }
     });
   } catch(error) {
     console.error("MikeAircraft Storyteller error:",error);
-    return res.status(500).json({ok:false,service:"MikeAircraft Storyteller",version:"0.3",error:error.message});
+    return res.status(500).json({ok:false,service:"MikeAircraft Storyteller",version:"0.4",error:error.message});
   }
 };
