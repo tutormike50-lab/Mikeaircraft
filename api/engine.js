@@ -17,4 +17,4 @@ if (!process.env.KV_REST_API_TOKEN && redisToken) {
   process.env.KV_REST_API_TOKEN = redisToken;
 }
 
-module.exports = require("../lib/engine-base.js");
+module.exports = require("../lib/editorial-engine-wrapper.js");
