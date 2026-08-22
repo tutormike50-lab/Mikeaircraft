@@ -1,5 +1,6 @@
 // MikeAircraft Storyteller API
 // Version 0.3
+// Production sync 2026-08-22
 //
 // Produces short, grounded viewer-friendly story copy from live MikeAircraft
 // data. Aircraft-specific copy is only allowed when the Director's identity
@@ -88,8 +89,6 @@ module.exports = async function handler(req, res) {
       return { checked:true, accepted:false, reason:"Movement lineage is not certain enough to validate route" };
     }
 
-    // A Redis-free fallback may provide generic activity context, but can never
-    // be promoted into a named aircraft story.
     function chooseInstantaneousContext(list) {
       if (!Array.isArray(list)) return null;
       const candidates = [];
