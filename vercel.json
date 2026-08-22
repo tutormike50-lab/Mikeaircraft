@@ -1,9 +1,16 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "redirects": [
     {
       "source": "/",
       "destination": "/api/monitor",
       "permanent": false
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/network-learner",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
