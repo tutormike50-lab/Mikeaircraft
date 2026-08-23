@@ -11,7 +11,8 @@ function blobAuthOptions() {
 }
 
 function normalizeReg(value) {
-  const registration = String(value || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 12);\n  return registration.replace(/^40-/, '4O-');
+  const registration = String(value || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 12);
+  return registration.replace(/^40-/, '4O-');
 }
 
 function plausible(value) {
