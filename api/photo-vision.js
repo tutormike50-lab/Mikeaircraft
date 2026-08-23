@@ -11,7 +11,7 @@ function blobAuthOptions() {
 }
 
 function normalizeReg(value) {
-  return String(value || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 12);
+  const registration = String(value || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 12);\n  return registration.replace(/^40-/, '4O-');
 }
 
 function plausible(value) {
@@ -162,7 +162,7 @@ module.exports = async function handler(req, res) {
     const prompt = [
       'You are a conservative aircraft-registration OCR reader for a private photo catalogue.',
       'Inspect the actual image pixels at full detail. Concentrate on the rear fuselage, tail, nose gear doors and under-wing registration areas.',
-      'Read only a registration that is visibly painted on this aircraft. Never infer or guess it from airline, livery, route or aircraft type.',
+      'Read only a registration that is visibly painted on this aircraft. Never infer or guess it from airline, livery, route or aircraft type.',\n      'Distinguish letters from digits carefully. Montenegro registrations begin 4O- with the letter O, never 40- with zero.',
       'Return JSON only with keys registration, confidence, visibleText, airlineHint, aircraftTypeHint, reasoning.',
       'confidence must be a number from 0 to 1.',
       'If the registration is absent, too small, blurred, partly hidden, or even one character is uncertain, set registration to null and explain exactly what text or obstruction you could see.'
