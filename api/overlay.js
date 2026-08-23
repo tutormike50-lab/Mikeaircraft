@@ -1,3 +1,3 @@
-// MikeAircraft Livestream Overlay v2.3
+// MikeAircraft Livestream Overlay v2.4
 // Thin API entrypoint; implementation lives under /lib.
-module.exports = require("../lib/overlay-wrapper-v23.js");
+module.exports = require("../lib/overlay-wrapper-v24.js");
