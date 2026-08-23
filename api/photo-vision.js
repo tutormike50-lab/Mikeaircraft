@@ -3,10 +3,11 @@ function blobAuthOptions(){const o={};if(process.env.VERCEL_OIDC_TOKEN)o.oidcTok
 function normalizeReg(s){return String(s||'').toUpperCase().replace(/[^A-Z0-9-]/g,'').slice(0,12)}
 function plausible(s){return /^[A-Z0-9]{1,3}-[A-Z0-9]{2,6}$/.test(s)||/^[A-Z]{1,3}[A-Z0-9]{3,5}$/.test(s)}
 module.exports=async function handler(req,res){res.setHeader('Cache-Control','no-store');try{
+ const gatewayKey=process.env.AI_GATEWAY_API_KEY||process.env.VERCEL_AI_GATEWAY_KEY;
+ if(req.method==='GET')return res.status(200).json({ok:true,service:'MikeAircraft Visual Registration Reader',version:'0.2',ready:!!gatewayKey,blobReady:!!process.env.VERCEL_OIDC_TOKEN});
  if(req.method!=='POST')return res.status(405).json({ok:false,error:'POST required'});
  const body=typeof req.body==='string'?JSON.parse(req.body||'{}'):(req.body||{});const pathname=String(body.pathname||'');
  if(!pathname.startsWith('photo-library/')||!/[.](jpg|jpeg|png|webp)$/i.test(pathname))return res.status(400).json({ok:false,error:'Invalid photo'});
- const gatewayKey=process.env.AI_GATEWAY_API_KEY||process.env.VERCEL_AI_GATEWAY_KEY;
  if(!gatewayKey)return res.status(503).json({ok:false,ready:false,error:'Vision provider is not configured yet. Add AI Gateway credentials to enable automatic registration reading.'});
  const token=await issueSignedToken({pathname,operations:['get'],validUntil:Date.now()+10*60*1000,...blobAuthOptions()});
  const signed=await presignUrl(token,{operation:'get',pathname,access:'private',validUntil:Date.now()+8*60*1000});
@@ -17,5 +18,5 @@ module.exports=async function handler(req,res){res.setHeader('Cache-Control','no
  let result={};try{result=JSON.parse(outer.choices?.[0]?.message?.content||'{}')}catch{}
  const registration=normalizeReg(result.registration);const confidence=Math.max(0,Math.min(1,Number(result.confidence)||0));
  const accepted=registration&&plausible(registration)&&confidence>=0.86;
- return res.status(200).json({ok:true,service:'MikeAircraft Visual Registration Reader',version:'0.1',pathname,registration:accepted?registration:null,candidate:registration||null,confidence,status:accepted?'PROBABLE':'UNKNOWN',visibleText:result.visibleText||null,airlineHint:result.airlineHint||null,aircraftTypeHint:result.aircraftTypeHint||null,reasoning:result.reasoning||null,rule:'Visual AI never marks CONFIRMED automatically.'});
+ return res.status(200).json({ok:true,service:'MikeAircraft Visual Registration Reader',version:'0.2',pathname,registration:accepted?registration:null,candidate:registration||null,confidence,status:accepted?'PROBABLE':'UNKNOWN',visibleText:result.visibleText||null,airlineHint:result.airlineHint||null,aircraftTypeHint:result.aircraftTypeHint||null,reasoning:result.reasoning||null,rule:'Visual AI never marks CONFIRMED automatically.'});
  }catch(e){console.error('Photo vision error',e);return res.status(500).json({ok:false,error:e.message})}}
