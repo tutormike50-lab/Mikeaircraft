@@ -89,7 +89,7 @@ module.exports = async function handler(req, res) {
       const pathname = String(body.pathname || '');
       if (!pathname.startsWith('photo-library/') || pathname === CATALOG_PATH) return res.status(400).json({ ok: false, error: 'Invalid photo pathname' });
       const status = ['CONFIRMED', 'PROBABLE', 'UNKNOWN'].includes(String(body.status || '').toUpperCase()) ? String(body.status).toUpperCase() : 'UNKNOWN';
-      const registration = String(body.registration || '').trim().toUpperCase().slice(0, 20);
+      const registration = String(body.registration || '').trim().toUpperCase().slice(0, 20).replace(/^40-/, '4O-');
       const catalog = await readCatalog();
       catalog.items = catalog.items || {};
       catalog.items[pathname] = {
