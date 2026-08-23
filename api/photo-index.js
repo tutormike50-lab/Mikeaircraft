@@ -45,6 +45,13 @@ async function readCatalog() {
     const response = await fetch(presignedUrl, { cache: 'no-store' });
     if (!response.ok) throw new Error('catalog HTTP ' + response.status);
     const data = await response.json();
+    if (data && data.items && typeof data.items === 'object') {
+      for (const item of Object.values(data.items)) {
+        if (item && typeof item.registration === 'string') {
+          item.registration = item.registration.toUpperCase().replace(/^40-/, '4O-');
+        }
+      }
+    }
     return data && typeof data === 'object' ? data : { version: 1, updatedAt: null, items: {} };
   } catch (error) {
     console.warn('Photo catalog read fallback', error.message);
