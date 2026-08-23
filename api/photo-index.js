@@ -25,17 +25,29 @@ function parsePath(pathname) {
 
 async function readCatalog() {
   try {
-    const auth = process.env.VERCEL_OIDC_TOKEN ? `Bearer ${process.env.VERCEL_OIDC_TOKEN}` : null;
     const page = await list({ prefix: CATALOG_PATH, limit: 10, ...blobAuthOptions() });
     const hit = (page.blobs || []).find(b => b.pathname === CATALOG_PATH);
     if (!hit) return { version: 1, updatedAt: null, items: {} };
-    const headers = auth ? { Authorization: auth } : {};
-    const r = await fetch(hit.url, { headers, cache: 'no-store' });
-    if (!r.ok) return { version: 1, updatedAt: null, items: {} };
-    const data = await r.json();
+
+    const token = await issueSignedToken({
+      pathname: CATALOG_PATH,
+      operations: ['get'],
+      validUntil: Date.now() + 10 * 60 * 1000,
+      ...blobAuthOptions()
+    });
+    const { presignedUrl } = await presignUrl(token, {
+      operation: 'get',
+      pathname: CATALOG_PATH,
+      access: 'private',
+      validUntil: Date.now() + 5 * 60 * 1000,
+      useCache: false
+    });
+    const response = await fetch(presignedUrl, { cache: 'no-store' });
+    if (!response.ok) throw new Error('catalog HTTP ' + response.status);
+    const data = await response.json();
     return data && typeof data === 'object' ? data : { version: 1, updatedAt: null, items: {} };
-  } catch (e) {
-    console.warn('Photo catalog read fallback', e.message);
+  } catch (error) {
+    console.warn('Photo catalog read fallback', error.message);
     return { version: 1, updatedAt: null, items: {} };
   }
 }
@@ -141,7 +153,7 @@ module.exports = async function handler(req, res) {
       if (s === 'CONFIRMED') counts.confirmed++; else if (s === 'PROBABLE') counts.probable++; else counts.unknown++;
       if (x.catalog?.usable !== false) counts.usable++;
     }
-    return res.status(200).json({ ok: true, service: 'MikeAircraft Photo Librarian', version: '0.1', counts, catalogUpdatedAt: catalog.updatedAt, items });
+    return res.status(200).json({ ok: true, service: 'MikeAircraft Photo Librarian', version: '0.2', counts, catalogUpdatedAt: catalog.updatedAt, items });
   } catch (error) {
     console.error('MikeAircraft Photo Librarian error', error);
     return res.status(500).json({ ok: false, error: error.message });
