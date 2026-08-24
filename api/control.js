@@ -116,7 +116,38 @@ module.exports = async function handler(req, res) {
     .airport.active .code{color:var(--green)}
     .name{display:block;margin-top:4px;color:#bed0dc;font-size:13px}
     .icao{position:absolute;top:15px;right:14px;color:#69869a;font-size:11px;font-weight:800}
-    #message{min-height:24px;margin-top:18px;color:#a9bfd0;font-size:14px}
+    #message,#locationMessage{min-height:24px;margin-top:18px;color:#a9bfd0;font-size:14px}
+    .location-card{margin-top:22px}
+    .location-summary{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:18px;
+      margin-bottom:18px;
+      padding:14px 16px;
+      border:1px solid #294f69;
+      border-radius:11px;
+      background:#081a29;
+    }
+    .location-label{color:var(--muted);font-size:11px;font-weight:800;letter-spacing:1px}
+    .location-value{font-size:17px;font-weight:900;text-align:right}
+    .location-button{
+      width:100%;
+      min-height:58px;
+      padding:15px 20px;
+      border:1px solid #55c9f7;
+      border-radius:12px;
+      background:linear-gradient(135deg,#0f72a3,#07547c);
+      color:white;
+      cursor:pointer;
+      font-weight:900;
+      letter-spacing:.7px;
+      box-shadow:0 8px 24px rgba(21,139,190,.2);
+    }
+    .location-button:hover{background:linear-gradient(135deg,#1388be,#08618e)}
+    .location-button:focus-visible{outline:3px solid rgba(92,229,154,.42);outline-offset:3px}
+    .location-button:disabled{cursor:wait;opacity:.62}
+    .location-note{margin:12px 0 0;color:#7893a6;font-size:12px;line-height:1.5}
     .footnote{margin:18px 4px 0;color:#6f8799;font-size:12px;line-height:1.5}
     @media(max-width:700px){
       .statusbar{grid-template-columns:1fr}
@@ -169,7 +200,23 @@ module.exports = async function handler(req, res) {
       </div>
     </section>
 
-    <p class="footnote">The YoloBox remains display-only. Changing a setting here will not affect the live overlay until the separate overlay-connection test has been completed.</p>
+    <section class="card location-card">
+      <div class="cardhead">
+        <h2>Camera Location</h2>
+        <p>Take this laptop or phone beside the camera, then reset its position for aircraft tracking.</p>
+      </div>
+      <div class="cardbody">
+        <div class="location-summary">
+          <span class="location-label">CAMERA POSITION</span>
+          <span id="cameraLocationStatus" class="location-value warn">CHECKING</span>
+        </div>
+        <button id="resetLocationButton" class="location-button" type="button">RESET CAMERA LOCATION</button>
+        <div id="locationMessage" role="status" aria-live="polite">The exact coordinates are stored privately and are not shown on the public overlay.</div>
+        <p class="location-note">For the best result, allow precise location and keep the device beside the camera while the position is captured.</p>
+      </div>
+    </section>
+
+    <p class="footnote">The YoloBox remains display-only. Airport and camera settings are controlled here.</p>
   </main>
 
   <script>
@@ -179,10 +226,14 @@ module.exports = async function handler(req, res) {
     const currentAirport = document.getElementById("currentAirport");
     const memoryStatus = document.getElementById("memoryStatus");
     const panelStatus = document.getElementById("panelStatus");
+    const cameraLocationStatus = document.getElementById("cameraLocationStatus");
+    const resetLocationButton = document.getElementById("resetLocationButton");
+    const locationMessage = document.getElementById("locationMessage");
 
     let selectedAirport = null;
     let airports = [];
     let busy = false;
+    let locationBusy = false;
 
     pinInput.value = sessionStorage.getItem("mikeaircraft-control-pin") || "";
     pinInput.addEventListener("input", () => {
@@ -192,6 +243,19 @@ module.exports = async function handler(req, res) {
     function setMessage(text, tone) {
       message.textContent = text;
       message.className = tone || "";
+    }
+
+    function setLocationMessage(text, tone) {
+      locationMessage.textContent = text;
+      locationMessage.className = tone || "";
+    }
+
+    function setLocationStatus(configured, updatedAt) {
+      cameraLocationStatus.textContent = configured ? "SAVED" : "NOT SET";
+      cameraLocationStatus.className = "location-value " + (configured ? "good" : "warn");
+      cameraLocationStatus.title = configured && updatedAt
+        ? "Saved " + new Date(updatedAt).toLocaleString()
+        : "No camera position has been saved";
     }
 
     function renderAirports() {
@@ -234,6 +298,10 @@ module.exports = async function handler(req, res) {
         memoryStatus.className = "statusvalue " + (redisConnected ? "good" : "bad");
         panelStatus.textContent = "READY";
         panelStatus.className = "statusvalue good";
+        setLocationStatus(
+          Boolean(data.settings?.cameraLocationConfigured),
+          data.settings?.cameraLocationUpdatedAt || null
+        );
         setMessage(redisConnected ? "Choose an airport when you are ready." : "Redis is unavailable; airport changes cannot be saved.", redisConnected ? "" : "bad");
         renderAirports();
       }
@@ -242,6 +310,8 @@ module.exports = async function handler(req, res) {
         panelStatus.className = "statusvalue bad";
         memoryStatus.textContent = "UNKNOWN";
         memoryStatus.className = "statusvalue bad";
+        cameraLocationStatus.textContent = "UNKNOWN";
+        cameraLocationStatus.className = "location-value bad";
         setMessage(error.message, "bad");
       }
     }
@@ -299,6 +369,116 @@ module.exports = async function handler(req, res) {
         renderAirports();
       }
     }
+
+    function locationErrorMessage(error) {
+      if (error && error.code === 1) {
+        return "Location permission was denied. Allow precise location for this site, then try again.";
+      }
+      if (error && error.code === 2) {
+        return "Your device could not determine its location. Move beside a window or use a phone, then try again.";
+      }
+      if (error && error.code === 3) {
+        return "Location capture timed out. Keep the device beside the camera and try again.";
+      }
+      return "The camera location could not be captured.";
+    }
+
+    async function saveCameraLocation(position) {
+      const pin = pinInput.value.trim();
+
+      try {
+        const response = await fetch("/api/settings", {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/json",
+            "X-MikeAircraft-Control-Pin": pin
+          },
+          body: JSON.stringify({
+            cameraLocation: {
+              lat: position.coords.latitude,
+              lon: position.coords.longitude,
+              accuracyM: position.coords.accuracy,
+              altitudeM: Number.isFinite(position.coords.altitude) ? position.coords.altitude : null
+            }
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Camera location save failed");
+        }
+
+        const accuracy = Number(data.cameraLocation?.accuracyM);
+        const accuracyText = Number.isFinite(accuracy) ? " ±" + Math.round(accuracy) + "m" : "";
+        cameraLocationStatus.textContent = "SAVED" + accuracyText;
+        cameraLocationStatus.className = "location-value good";
+        cameraLocationStatus.title = data.cameraLocation?.updatedAt
+          ? "Saved " + new Date(data.cameraLocation.updatedAt).toLocaleString()
+          : "Camera position saved";
+
+        if (Number.isFinite(accuracy) && accuracy > 25) {
+          setLocationMessage("Saved, but accuracy is" + accuracyText + ". A phone beside the camera with precise location enabled will improve tracking.", "warn");
+        }
+        else {
+          setLocationMessage("Camera position saved" + accuracyText + ".", "good");
+        }
+      }
+      catch (error) {
+        cameraLocationStatus.textContent = "NOT SAVED";
+        cameraLocationStatus.className = "location-value bad";
+        setLocationMessage(error.message, "bad");
+      }
+      finally {
+        locationBusy = false;
+        resetLocationButton.disabled = false;
+        resetLocationButton.textContent = "RESET CAMERA LOCATION";
+      }
+    }
+
+    function resetCameraLocation() {
+      if (locationBusy) {
+        return;
+      }
+
+      if (!pinInput.value.trim()) {
+        pinInput.focus();
+        setLocationMessage("Enter your private control PIN first.", "warn");
+        return;
+      }
+
+      if (!navigator.geolocation) {
+        setLocationMessage("This browser does not support location capture. Open the Control Panel on a phone or modern browser.", "bad");
+        return;
+      }
+
+      locationBusy = true;
+      resetLocationButton.disabled = true;
+      resetLocationButton.textContent = "FINDING CAMERA POSITION…";
+      cameraLocationStatus.textContent = "LOCATING";
+      cameraLocationStatus.className = "location-value warn";
+      setLocationMessage("Keep this device beside the camera while its precise position is captured…", "warn");
+
+      navigator.geolocation.getCurrentPosition(
+        saveCameraLocation,
+        (error) => {
+          locationBusy = false;
+          resetLocationButton.disabled = false;
+          resetLocationButton.textContent = "RESET CAMERA LOCATION";
+          cameraLocationStatus.textContent = "NOT SAVED";
+          cameraLocationStatus.className = "location-value bad";
+          setLocationMessage(locationErrorMessage(error), "bad");
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 20000,
+          maximumAge: 0
+        }
+      );
+    }
+
+    resetLocationButton.addEventListener("click", resetCameraLocation);
 
     loadSettings();
   </script>
