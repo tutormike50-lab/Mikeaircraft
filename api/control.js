@@ -235,10 +235,13 @@ module.exports = async function handler(req, res) {
     let busy = false;
     let locationBusy = false;
 
-    pinInput.value = sessionStorage.getItem("mikeaircraft-control-pin") || "";
-    pinInput.addEventListener("input", () => {
-      sessionStorage.setItem("mikeaircraft-control-pin", pinInput.value);
-    });
+    sessionStorage.removeItem("mikeaircraft-control-pin");
+    pinInput.value = "";
+
+    function clearPin() {
+      pinInput.value = "";
+      sessionStorage.removeItem("mikeaircraft-control-pin");
+    }
 
     function setMessage(text, tone) {
       message.textContent = text;
@@ -358,6 +361,7 @@ module.exports = async function handler(req, res) {
         panelStatus.textContent = "SAVED";
         panelStatus.className = "statusvalue good";
         setMessage(selectedAirport + " is now the saved airport.", "good");
+        clearPin();
       }
       catch (error) {
         panelStatus.textContent = "ERROR";
@@ -424,6 +428,7 @@ module.exports = async function handler(req, res) {
         else {
           setLocationMessage("Camera position saved" + accuracyText + ".", "good");
         }
+        clearPin();
       }
       catch (error) {
         cameraLocationStatus.textContent = "NOT SAVED";
