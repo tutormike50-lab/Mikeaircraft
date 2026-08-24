@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 
-const VERSION = "0.1";
+const VERSION = "0.2";
 const SETTINGS_KEY = "mikeaircraft:control:settings";
 
 const AIRPORTS = [
@@ -19,8 +19,58 @@ const DEFAULT_SETTINGS = Object.freeze({
   airport: "PRG",
   cameraMode: "BOTH",
   storiesEnabled: false,
+  cameraLocation: null,
   updatedAt: null
 });
+
+function normaliseCameraLocation(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const lat = Number(value.lat);
+  const lon = Number(value.lon);
+  const accuracyM = Number(value.accuracyM);
+  const altitudeM = value.altitudeM === null || value.altitudeM === undefined
+    ? null
+    : Number(value.altitudeM);
+
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+    return null;
+  }
+
+  if (!Number.isFinite(lon) || lon < -180 || lon > 180) {
+    return null;
+  }
+
+  if (!Number.isFinite(accuracyM) || accuracyM < 0 || accuracyM > 100000) {
+    return null;
+  }
+
+  if (altitudeM !== null && (!Number.isFinite(altitudeM) || altitudeM < -500 || altitudeM > 10000)) {
+    return null;
+  }
+
+  return {
+    lat: Number(lat.toFixed(7)),
+    lon: Number(lon.toFixed(7)),
+    accuracyM: Number(accuracyM.toFixed(1)),
+    altitudeM: altitudeM === null ? null : Number(altitudeM.toFixed(1)),
+    source: "BROWSER_GEOLOCATION",
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString()
+  };
+}
+
+function publicSettings(settings) {
+  return {
+    airport: settings.airport,
+    cameraMode: settings.cameraMode,
+    storiesEnabled: settings.storiesEnabled,
+    cameraLocationConfigured: Boolean(settings.cameraLocation),
+    cameraLocationUpdatedAt: settings.cameraLocation?.updatedAt || null,
+    updatedAt: settings.updatedAt
+  };
+}
 
 function redisCredentials() {
   return {
@@ -87,7 +137,8 @@ function normaliseStoredSettings(value) {
     ...(parsed && typeof parsed === "object" ? parsed : {}),
     airport: AIRPORT_CODES.has(airport) ? airport : DEFAULT_SETTINGS.airport,
     cameraMode: "BOTH",
-    storiesEnabled: false
+    storiesEnabled: false,
+    cameraLocation: normaliseCameraLocation(parsed?.cameraLocation)
   };
 }
 
@@ -127,7 +178,7 @@ module.exports = async function handler(req, res) {
         ok: true,
         service: "MikeAircraft Control Settings",
         version: VERSION,
-        settings,
+        settings: publicSettings(settings),
         supportedAirports: AIRPORTS,
         persistence: {
           redisConnected: true
@@ -139,7 +190,7 @@ module.exports = async function handler(req, res) {
         ok: true,
         service: "MikeAircraft Control Settings",
         version: VERSION,
-        settings: { ...DEFAULT_SETTINGS },
+        settings: publicSettings({ ...DEFAULT_SETTINGS }),
         supportedAirports: AIRPORTS,
         persistence: {
           redisConnected: false,
@@ -172,14 +223,43 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  const requestedAirport = String(req.body?.airport || "")
-    .trim()
-    .toUpperCase();
+  const hasAirport = Boolean(
+    req.body &&
+    typeof req.body === "object" &&
+    Object.prototype.hasOwnProperty.call(req.body, "airport")
+  );
+  const hasCameraLocation = Boolean(
+    req.body &&
+    typeof req.body === "object" &&
+    Object.prototype.hasOwnProperty.call(req.body, "cameraLocation")
+  );
 
-  if (!AIRPORT_CODES.has(requestedAirport)) {
+  if (!hasAirport && !hasCameraLocation) {
+    return res.status(400).json({
+      ok: false,
+      error: "No supported setting was supplied"
+    });
+  }
+
+  const requestedAirport = hasAirport
+    ? String(req.body.airport || "").trim().toUpperCase()
+    : null;
+
+  if (hasAirport && !AIRPORT_CODES.has(requestedAirport)) {
     return res.status(400).json({
       ok: false,
       error: "Unsupported airport"
+    });
+  }
+
+  const requestedCameraLocation = hasCameraLocation
+    ? normaliseCameraLocation(req.body.cameraLocation)
+    : null;
+
+  if (hasCameraLocation && !requestedCameraLocation) {
+    return res.status(400).json({
+      ok: false,
+      error: "Invalid camera location"
     });
   }
 
@@ -195,7 +275,8 @@ module.exports = async function handler(req, res) {
 
     const settings = {
       ...current,
-      airport: requestedAirport,
+      ...(hasAirport ? { airport: requestedAirport } : {}),
+      ...(hasCameraLocation ? { cameraLocation: requestedCameraLocation } : {}),
       updatedAt: new Date().toISOString()
     };
 
@@ -205,13 +286,21 @@ module.exports = async function handler(req, res) {
       ok: true,
       service: "MikeAircraft Control Settings",
       version: VERSION,
-      settings
+      settings: publicSettings(settings),
+      cameraLocation: hasCameraLocation
+        ? {
+            saved: true,
+            accuracyM: settings.cameraLocation.accuracyM,
+            altitudeAvailable: settings.cameraLocation.altitudeM !== null,
+            updatedAt: settings.cameraLocation.updatedAt
+          }
+        : undefined
     });
   }
   catch (error) {
     return res.status(503).json({
       ok: false,
-      error: "Could not save the airport setting",
+      error: "Could not save the control setting",
       detail: error.message
     });
   }
