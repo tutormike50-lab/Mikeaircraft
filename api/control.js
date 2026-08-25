@@ -83,7 +83,7 @@ module.exports = async function handler(req, res) {
     .cardhead h2{margin:0;font-size:20px}
     .cardhead p{margin:7px 0 0;color:#a7bdcc;font-size:14px;line-height:1.45}
     .cardbody{padding:22px}
-    .pinrow{display:flex;gap:10px;margin-bottom:20px}
+    .pinrow{display:flex;align-items:center;gap:10px;margin-bottom:20px}
     .pinrow input{
       width:220px;
       max-width:100%;
@@ -95,6 +95,17 @@ module.exports = async function handler(req, res) {
       color:white;
     }
     .pinrow input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(53,174,232,.14)}
+    .lock-status{
+      flex:0 0 auto;
+      padding:9px 11px;
+      border:1px solid #3b6078;
+      border-radius:999px;
+      color:var(--muted);
+      font-size:11px;
+      font-weight:900;
+      letter-spacing:.7px;
+    }
+    .lock-status.unlocked{border-color:rgba(92,229,154,.62);background:rgba(24,110,72,.2);color:var(--green)}
     .airportgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
     .airport{
       position:relative;
@@ -175,7 +186,9 @@ module.exports = async function handler(req, res) {
     }
     @media(max-width:430px){
       .airportgrid{grid-template-columns:1fr}
+      .pinrow{align-items:stretch;flex-direction:column}
       .pinrow input{width:100%}
+      .lock-status{text-align:center}
     }
   </style>
 </head>
@@ -218,6 +231,7 @@ module.exports = async function handler(req, res) {
       <div class="cardbody">
         <div class="pinrow">
           <input id="pin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Private control PIN" aria-label="Private control PIN">
+          <span id="lockStatus" class="lock-status">LOCKED</span>
         </div>
         <div id="airportGrid" class="airportgrid" aria-label="Available airports"></div>
         <div id="message" role="status" aria-live="polite">Loading the saved setting…</div>
@@ -261,6 +275,7 @@ module.exports = async function handler(req, res) {
 
   <script>
     const pinInput = document.getElementById("pin");
+    const lockStatus = document.getElementById("lockStatus");
     const grid = document.getElementById("airportGrid");
     const message = document.getElementById("message");
     const currentAirport = document.getElementById("currentAirport");
@@ -281,13 +296,27 @@ module.exports = async function handler(req, res) {
     let priorityMode = "AUTO";
     let priorityUntil = null;
 
-    sessionStorage.removeItem("mikeaircraft-control-pin");
-    pinInput.value = "";
+    const pinStorageKey = "mikeaircraft-control-pin";
+    pinInput.value = sessionStorage.getItem(pinStorageKey) || "";
 
-    function clearPin() {
-      pinInput.value = "";
-      sessionStorage.removeItem("mikeaircraft-control-pin");
+    function setLockStatus(unlocked) {
+      lockStatus.textContent = unlocked ? "UNLOCKED" : "LOCKED";
+      lockStatus.className = "lock-status" + (unlocked ? " unlocked" : "");
     }
+
+    function rememberPin(pin) {
+      sessionStorage.setItem(pinStorageKey, pin);
+      pinInput.value = pin;
+      setLockStatus(true);
+    }
+
+    function forgetPin() {
+      sessionStorage.removeItem(pinStorageKey);
+      pinInput.value = "";
+      setLockStatus(false);
+    }
+
+    setLockStatus(Boolean(pinInput.value));
 
     function setMessage(text, tone) {
       message.textContent = text;
@@ -425,6 +454,7 @@ module.exports = async function handler(req, res) {
 
         const data = await response.json();
 
+        if (response.status === 401) forgetPin();
         if (!response.ok || !data.ok) {
           throw new Error(data.error || "Airport change failed");
         }
@@ -435,7 +465,7 @@ module.exports = async function handler(req, res) {
         panelStatus.textContent = "SAVED";
         panelStatus.className = "statusvalue good";
         setMessage(selectedAirport + " is now the saved airport.", "good");
-        clearPin();
+        rememberPin(pin);
       }
       catch (error) {
         panelStatus.textContent = "ERROR";
@@ -479,13 +509,14 @@ module.exports = async function handler(req, res) {
           body: JSON.stringify({ priorityMode: mode })
         });
         const data = await response.json();
+        if (response.status === 401) forgetPin();
         if (!response.ok || !data.ok) throw new Error(data.error || "Priority change failed");
 
         priorityMode = data.settings?.priorityMode || "AUTO";
         priorityUntil = data.settings?.priorityUntil || null;
         panelStatus.textContent = "SAVED";
         panelStatus.className = "statusvalue good";
-        clearPin();
+        rememberPin(pin);
       }
       catch (error) {
         priorityError = error.message;
@@ -538,6 +569,7 @@ module.exports = async function handler(req, res) {
 
         const data = await response.json();
 
+        if (response.status === 401) forgetPin();
         if (!response.ok || !data.ok) {
           throw new Error(data.error || "Camera location save failed");
         }
@@ -556,7 +588,7 @@ module.exports = async function handler(req, res) {
         else {
           setLocationMessage("Camera position saved" + accuracyText + ".", "good");
         }
-        clearPin();
+        rememberPin(pin);
       }
       catch (error) {
         cameraLocationStatus.textContent = "NOT SAVED";
@@ -612,6 +644,9 @@ module.exports = async function handler(req, res) {
     }
 
     resetLocationButton.addEventListener("click", resetCameraLocation);
+    pinInput.addEventListener("input", () => {
+      setLockStatus(Boolean(pinInput.value) && pinInput.value === sessionStorage.getItem(pinStorageKey));
+    });
     priorityButtons.forEach((button) => {
       button.addEventListener("click", () => savePriority(button.dataset.priority));
     });
