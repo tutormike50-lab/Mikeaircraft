@@ -9,22 +9,22 @@ module.exports = function handler(req, res) {
     start_url: "/api/hub",
     scope: "/api/",
     display: "standalone",
+    prefer_related_applications: false,
     background_color: "#050d16",
     theme_color: "#06111d",
     icons: [
       {
-        src: "/api/app-icon",
-        sizes: "128x128",
+        src: "/mikeaircraft-192.webp",
+        sizes: "192x192",
         type: "image/webp",
         purpose: "any"
       },
       {
-        src: "/api/app-icon",
-        sizes: "128x128",
+        src: "/mikeaircraft-512.webp",
+        sizes: "512x512",
         type: "image/webp",
         purpose: "maskable"
       }
     ]
   });
 };
-
