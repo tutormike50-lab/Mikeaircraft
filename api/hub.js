@@ -13,7 +13,7 @@ module.exports = async function handler(req, res) {
   <title>MikeAircraft Operations Hub</title>
   <link rel="icon" type="image/webp" href="/api/app-icon">
   <link rel="apple-touch-icon" href="/api/app-icon">
-  <link rel="manifest" href="/api/manifest">
+  <link rel="manifest" href="/api/manifest?v=3">
   <style>
     :root{
       color-scheme:dark;
@@ -200,7 +200,7 @@ module.exports = async function handler(req, res) {
       <header class="topbar">
         <div class="title"><h1 id="pageTitle">Operations Overview</h1><p id="pageSubtitle">Everything needed to operate MikeAircraft from one place</p></div>
         <div class="actions">
-          <button id="installButton" class="action" type="button">INSTALL DESKTOP APP</button>
+          <button id="installButton" class="action" type="button" disabled>PREPARING INSTALL…</button>
           <button id="refreshButton" class="action" type="button">REFRESH</button>
           <button id="openButton" class="action hidden" type="button">OPEN FULL PAGE</button>
         </div>
@@ -266,12 +266,10 @@ module.exports = async function handler(req, res) {
       event.preventDefault();
       installPrompt = event;
       installButton.textContent = "INSTALL DESKTOP APP";
+      installButton.disabled = false;
     });
     installButton.addEventListener("click", async function() {
-      if (!installPrompt) {
-        window.alert("Chrome unlocks app installation after this page has been open for about 30 seconds. Keep the hub open, then click INSTALL DESKTOP APP again.");
-        return;
-      }
+      if (!installPrompt) return;
       installPrompt.prompt();
       await installPrompt.userChoice;
       installPrompt = null;
@@ -285,7 +283,7 @@ module.exports = async function handler(req, res) {
     });
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", function() {
-        navigator.serviceWorker.register("/api/app-sw", { scope: "/api/" }).catch(function() {});
+        navigator.serviceWorker.register("/api/app-sw?v=2", { scope: "/api/", updateViaCache: "none" }).catch(function() {});
       });
     }
 

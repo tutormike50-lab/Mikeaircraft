@@ -1,6 +1,6 @@
 module.exports = function handler(req, res) {
   res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
-  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   return res.status(200).json({
     name: "MikeAircraft Operations Hub",
     short_name: "MikeAircraft",
@@ -14,15 +14,15 @@ module.exports = function handler(req, res) {
     theme_color: "#06111d",
     icons: [
       {
-        src: "/mikeaircraft-192.webp",
+        src: "/mikeaircraft-192.png",
         sizes: "192x192",
-        type: "image/webp",
+        type: "image/png",
         purpose: "any"
       },
       {
-        src: "/mikeaircraft-512.webp",
+        src: "/mikeaircraft-512.png",
         sizes: "512x512",
-        type: "image/webp",
+        type: "image/png",
         purpose: "maskable"
       }
     ]
