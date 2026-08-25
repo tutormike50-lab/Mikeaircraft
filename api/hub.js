@@ -8,7 +8,12 @@ module.exports = async function handler(req, res) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#06111d">
+  <meta name="application-name" content="MikeAircraft">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>MikeAircraft Operations Hub</title>
+  <link rel="icon" type="image/webp" href="/api/app-icon">
+  <link rel="apple-touch-icon" href="/api/app-icon">
+  <link rel="manifest" href="/api/manifest">
   <style>
     :root{
       color-scheme:dark;
@@ -195,6 +200,7 @@ module.exports = async function handler(req, res) {
       <header class="topbar">
         <div class="title"><h1 id="pageTitle">Operations Overview</h1><p id="pageSubtitle">Everything needed to operate MikeAircraft from one place</p></div>
         <div class="actions">
+          <button id="installButton" class="action hidden" type="button">INSTALL APP</button>
           <button id="refreshButton" class="action" type="button">REFRESH</button>
           <button id="openButton" class="action hidden" type="button">OPEN FULL PAGE</button>
         </div>
@@ -250,9 +256,33 @@ module.exports = async function handler(req, res) {
     const frame = document.getElementById("systemFrame");
     const title = document.getElementById("pageTitle");
     const subtitle = document.getElementById("pageSubtitle");
+    const installButton = document.getElementById("installButton");
     const refreshButton = document.getElementById("refreshButton");
     const openButton = document.getElementById("openButton");
     let activeView = "overview";
+    let installPrompt = null;
+
+    window.addEventListener("beforeinstallprompt", function(event) {
+      event.preventDefault();
+      installPrompt = event;
+      installButton.classList.remove("hidden");
+    });
+    installButton.addEventListener("click", async function() {
+      if (!installPrompt) return;
+      installPrompt.prompt();
+      await installPrompt.userChoice;
+      installPrompt = null;
+      installButton.classList.add("hidden");
+    });
+    window.addEventListener("appinstalled", function() {
+      installPrompt = null;
+      installButton.classList.add("hidden");
+    });
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function() {
+        navigator.serviceWorker.register("/api/app-sw", { scope: "/api/" }).catch(function() {});
+      });
+    }
 
     function validView(name) { return Object.prototype.hasOwnProperty.call(views, name) ? name : "overview"; }
 
