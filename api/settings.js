@@ -1,7 +1,9 @@
 const crypto = require("crypto");
 
-const VERSION = "0.2";
+const VERSION = "0.3";
 const SETTINGS_KEY = "mikeaircraft:control:settings";
+const PRIORITY_DURATION_MS = 2 * 60 * 1000;
+const PRIORITY_MODES = new Set(["AUTO", "ARRIVAL", "TAKEOFF"]);
 
 const AIRPORTS = [
   { code: "PRG", icao: "LKPR", name: "Prague" },
@@ -19,6 +21,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   airport: "PRG",
   cameraMode: "BOTH",
   storiesEnabled: false,
+  priorityMode: "AUTO",
+  priorityUntil: null,
   cameraLocation: null,
   updatedAt: null
 });
@@ -62,10 +66,19 @@ function normaliseCameraLocation(value) {
 }
 
 function publicSettings(settings) {
+  const priorityUntilMs = Date.parse(settings.priorityUntil || "");
+  const priorityActive = settings.priorityMode !== "AUTO" &&
+    Number.isFinite(priorityUntilMs) && priorityUntilMs > Date.now();
+
   return {
     airport: settings.airport,
     cameraMode: settings.cameraMode,
     storiesEnabled: settings.storiesEnabled,
+    priorityMode: priorityActive ? settings.priorityMode : "AUTO",
+    priorityUntil: priorityActive ? settings.priorityUntil : null,
+    priorityExpiresInSeconds: priorityActive
+      ? Math.max(0, Math.ceil((priorityUntilMs - Date.now()) / 1000))
+      : 0,
     cameraLocationConfigured: Boolean(settings.cameraLocation),
     cameraLocationUpdatedAt: settings.cameraLocation?.updatedAt || null,
     updatedAt: settings.updatedAt
@@ -132,12 +145,20 @@ function normaliseStoredSettings(value) {
     .trim()
     .toUpperCase();
 
+  const requestedPriority = String(parsed?.priorityMode || "AUTO").trim().toUpperCase();
+  const priorityUntilMs = Date.parse(parsed?.priorityUntil || "");
+  const priorityActive = PRIORITY_MODES.has(requestedPriority) &&
+    requestedPriority !== "AUTO" &&
+    Number.isFinite(priorityUntilMs) && priorityUntilMs > Date.now();
+
   return {
     ...DEFAULT_SETTINGS,
     ...(parsed && typeof parsed === "object" ? parsed : {}),
     airport: AIRPORT_CODES.has(airport) ? airport : DEFAULT_SETTINGS.airport,
     cameraMode: "BOTH",
     storiesEnabled: false,
+    priorityMode: priorityActive ? requestedPriority : "AUTO",
+    priorityUntil: priorityActive ? new Date(priorityUntilMs).toISOString() : null,
     cameraLocation: normaliseCameraLocation(parsed?.cameraLocation)
   };
 }
@@ -233,8 +254,13 @@ module.exports = async function handler(req, res) {
     typeof req.body === "object" &&
     Object.prototype.hasOwnProperty.call(req.body, "cameraLocation")
   );
+  const hasPriorityMode = Boolean(
+    req.body &&
+    typeof req.body === "object" &&
+    Object.prototype.hasOwnProperty.call(req.body, "priorityMode")
+  );
 
-  if (!hasAirport && !hasCameraLocation) {
+  if (!hasAirport && !hasCameraLocation && !hasPriorityMode) {
     return res.status(400).json({
       ok: false,
       error: "No supported setting was supplied"
@@ -249,6 +275,17 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({
       ok: false,
       error: "Unsupported airport"
+    });
+  }
+
+  const requestedPriorityMode = hasPriorityMode
+    ? String(req.body.priorityMode || "").trim().toUpperCase()
+    : null;
+
+  if (hasPriorityMode && !PRIORITY_MODES.has(requestedPriorityMode)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Unsupported priority mode"
     });
   }
 
@@ -277,10 +314,20 @@ module.exports = async function handler(req, res) {
       ...current,
       ...(hasAirport ? { airport: requestedAirport } : {}),
       ...(hasCameraLocation ? { cameraLocation: requestedCameraLocation } : {}),
+      ...(hasPriorityMode ? {
+        priorityMode: requestedPriorityMode,
+        priorityUntil: requestedPriorityMode === "AUTO"
+          ? null
+          : new Date(Date.now() + PRIORITY_DURATION_MS).toISOString()
+      } : {}),
       updatedAt: new Date().toISOString()
     };
 
     await redisCommand(["SET", SETTINGS_KEY, JSON.stringify(settings)]);
+
+    if (hasPriorityMode) {
+      await redisCommand(["DEL", `mikeaircraft:v2:${settings.airport}:editorial-current`]);
+    }
 
     return res.status(200).json({
       ok: true,

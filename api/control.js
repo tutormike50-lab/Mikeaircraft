@@ -57,7 +57,7 @@ module.exports = async function handler(req, res) {
     main{width:min(980px,100%);margin:0 auto;padding:28px clamp(16px,4vw,34px) 44px}
     .statusbar{
       display:grid;
-      grid-template-columns:repeat(3,1fr);
+      grid-template-columns:repeat(4,1fr);
       gap:12px;
       margin-bottom:22px;
     }
@@ -117,6 +117,25 @@ module.exports = async function handler(req, res) {
     .name{display:block;margin-top:4px;color:#bed0dc;font-size:13px}
     .icao{position:absolute;top:15px;right:14px;color:#69869a;font-size:11px;font-weight:800}
     #message,#locationMessage{min-height:24px;margin-top:18px;color:#a9bfd0;font-size:14px}
+    #priorityMessage{min-height:24px;margin-top:15px;color:#a9bfd0;font-size:14px}
+    .priority-card{margin-top:22px}
+    .priority-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+    .priority-button{
+      min-height:66px;
+      padding:14px 12px;
+      border:1px solid #2f5c79;
+      border-radius:12px;
+      background:#0a2234;
+      color:#d8e7f0;
+      cursor:pointer;
+      font-weight:900;
+      letter-spacing:.45px;
+      transition:transform .12s ease,border-color .12s ease,background .12s ease;
+    }
+    .priority-button:hover{transform:translateY(-1px);border-color:#54bce9;background:#0c2b41}
+    .priority-button.active{border-color:var(--green);background:linear-gradient(145deg,#0b3b42,#0a2938);color:var(--green);box-shadow:inset 0 0 0 1px rgba(92,229,154,.2)}
+    .priority-button:focus-visible{outline:3px solid rgba(53,174,232,.4);outline-offset:2px}
+    .priority-button:disabled{cursor:wait;opacity:.62;transform:none}
     .location-card{margin-top:22px}
     .location-summary{
       display:flex;
@@ -150,8 +169,9 @@ module.exports = async function handler(req, res) {
     .location-note{margin:12px 0 0;color:#7893a6;font-size:12px;line-height:1.5}
     .footnote{margin:18px 4px 0;color:#6f8799;font-size:12px;line-height:1.5}
     @media(max-width:700px){
-      .statusbar{grid-template-columns:1fr}
+      .statusbar{grid-template-columns:repeat(2,1fr)}
       .airportgrid{grid-template-columns:repeat(2,1fr)}
+      .priority-grid{grid-template-columns:1fr}
     }
     @media(max-width:430px){
       .airportgrid{grid-template-columns:1fr}
@@ -184,6 +204,10 @@ module.exports = async function handler(req, res) {
         <span class="statuslabel">CONTROL PANEL</span>
         <span id="panelStatus" class="statusvalue good">READY</span>
       </div>
+      <div class="statusitem">
+        <span class="statuslabel">LIVE PRIORITY</span>
+        <span id="priorityStatus" class="statusvalue good">AUTO</span>
+      </div>
     </section>
 
     <section class="card">
@@ -197,6 +221,21 @@ module.exports = async function handler(req, res) {
         </div>
         <div id="airportGrid" class="airportgrid" aria-label="Available airports"></div>
         <div id="message" role="status" aria-live="polite">Loading the saved setting…</div>
+      </div>
+    </section>
+
+    <section class="card priority-card">
+      <div class="cardhead">
+        <h2>Live Aircraft Priority</h2>
+        <p>Use the PIN above to change which live movement gets the ribbon. A manual choice returns to AUTO after two minutes.</p>
+      </div>
+      <div class="cardbody">
+        <div class="priority-grid" aria-label="Live aircraft priority">
+          <button class="priority-button" type="button" data-priority="AUTO">AUTO</button>
+          <button class="priority-button" type="button" data-priority="ARRIVAL">ARRIVAL PRIORITY</button>
+          <button class="priority-button" type="button" data-priority="TAKEOFF">TAKEOFF PRIORITY</button>
+        </div>
+        <div id="priorityMessage" role="status" aria-live="polite">Automatic selection is active.</div>
       </div>
     </section>
 
@@ -226,6 +265,9 @@ module.exports = async function handler(req, res) {
     const currentAirport = document.getElementById("currentAirport");
     const memoryStatus = document.getElementById("memoryStatus");
     const panelStatus = document.getElementById("panelStatus");
+    const priorityStatus = document.getElementById("priorityStatus");
+    const priorityMessage = document.getElementById("priorityMessage");
+    const priorityButtons = Array.from(document.querySelectorAll("[data-priority]"));
     const cameraLocationStatus = document.getElementById("cameraLocationStatus");
     const resetLocationButton = document.getElementById("resetLocationButton");
     const locationMessage = document.getElementById("locationMessage");
@@ -234,6 +276,9 @@ module.exports = async function handler(req, res) {
     let airports = [];
     let busy = false;
     let locationBusy = false;
+    let priorityBusy = false;
+    let priorityMode = "AUTO";
+    let priorityUntil = null;
 
     sessionStorage.removeItem("mikeaircraft-control-pin");
     pinInput.value = "";
@@ -251,6 +296,31 @@ module.exports = async function handler(req, res) {
     function setLocationMessage(text, tone) {
       locationMessage.textContent = text;
       locationMessage.className = tone || "";
+    }
+
+    function renderPriority() {
+      const untilMs = Date.parse(priorityUntil || "");
+      const remaining = Number.isFinite(untilMs) ? Math.max(0, Math.ceil((untilMs - Date.now()) / 1000)) : 0;
+      if (priorityMode !== "AUTO" && remaining <= 0) {
+        priorityMode = "AUTO";
+        priorityUntil = null;
+      }
+
+      priorityButtons.forEach((button) => {
+        const active = button.dataset.priority === priorityMode;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+        button.disabled = priorityBusy;
+      });
+
+      priorityStatus.textContent = priorityMode === "AUTO" ? "AUTO" : priorityMode + " " + remaining + "s";
+      priorityStatus.className = "statusvalue " + (priorityMode === "AUTO" ? "good" : "warn");
+      if (!priorityBusy) {
+        priorityMessage.textContent = priorityMode === "AUTO"
+          ? "Automatic selection is active."
+          : (priorityMode === "ARRIVAL" ? "Arrivals" : "Takeoffs") + " have priority for " + remaining + " seconds.";
+        priorityMessage.className = priorityMode === "AUTO" ? "" : "warn";
+      }
     }
 
     function setLocationStatus(configured, updatedAt) {
@@ -305,6 +375,9 @@ module.exports = async function handler(req, res) {
           Boolean(data.settings?.cameraLocationConfigured),
           data.settings?.cameraLocationUpdatedAt || null
         );
+        priorityMode = data.settings?.priorityMode || "AUTO";
+        priorityUntil = data.settings?.priorityUntil || null;
+        renderPriority();
         setMessage(redisConnected ? "Choose an airport when you are ready." : "Redis is unavailable; airport changes cannot be saved.", redisConnected ? "" : "bad");
         renderAirports();
       }
@@ -371,6 +444,60 @@ module.exports = async function handler(req, res) {
       finally {
         busy = false;
         renderAirports();
+      }
+    }
+
+    async function savePriority(mode) {
+      if (priorityBusy || mode === priorityMode) return;
+
+      let priorityError = null;
+
+      const pin = pinInput.value.trim();
+      if (!pin) {
+        pinInput.focus();
+        priorityMessage.textContent = "Enter your private control PIN above first.";
+        priorityMessage.className = "warn";
+        return;
+      }
+
+      priorityBusy = true;
+      panelStatus.textContent = "SAVING";
+      panelStatus.className = "statusvalue warn";
+      priorityMessage.textContent = "Changing live priority…";
+      priorityMessage.className = "warn";
+      renderPriority();
+
+      try {
+        const response = await fetch("/api/settings", {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/json",
+            "X-MikeAircraft-Control-Pin": pin
+          },
+          body: JSON.stringify({ priorityMode: mode })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Priority change failed");
+
+        priorityMode = data.settings?.priorityMode || "AUTO";
+        priorityUntil = data.settings?.priorityUntil || null;
+        panelStatus.textContent = "SAVED";
+        panelStatus.className = "statusvalue good";
+        clearPin();
+      }
+      catch (error) {
+        priorityError = error.message;
+        panelStatus.textContent = "ERROR";
+        panelStatus.className = "statusvalue bad";
+      }
+      finally {
+        priorityBusy = false;
+        renderPriority();
+        if (priorityError) {
+          priorityMessage.textContent = priorityError;
+          priorityMessage.className = "bad";
+        }
       }
     }
 
@@ -484,6 +611,10 @@ module.exports = async function handler(req, res) {
     }
 
     resetLocationButton.addEventListener("click", resetCameraLocation);
+    priorityButtons.forEach((button) => {
+      button.addEventListener("click", () => savePriority(button.dataset.priority));
+    });
+    setInterval(renderPriority, 1000);
 
     loadSettings();
   </script>
