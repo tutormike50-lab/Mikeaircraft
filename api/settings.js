@@ -3,7 +3,7 @@ const crypto = require("crypto");
 const VERSION = "0.3";
 const SETTINGS_KEY = "mikeaircraft:control:settings";
 const PRIORITY_DURATION_MS = 2 * 60 * 1000;
-const PRIORITY_MODES = new Set(["AUTO", "ARRIVAL", "TAKEOFF"]);
+const PRIORITY_MODES = new Set(["AUTO", "ARRIVAL", "TAKEOFF", "RUNWAY"]);
 
 const AIRPORTS = [
   { code: "PRG", icao: "LKPR", name: "Prague" },

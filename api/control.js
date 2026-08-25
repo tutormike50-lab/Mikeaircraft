@@ -119,7 +119,7 @@ module.exports = async function handler(req, res) {
     #message,#locationMessage{min-height:24px;margin-top:18px;color:#a9bfd0;font-size:14px}
     #priorityMessage{min-height:24px;margin-top:15px;color:#a9bfd0;font-size:14px}
     .priority-card{margin-top:22px}
-    .priority-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+    .priority-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
     .priority-button{
       min-height:66px;
       padding:14px 12px;
@@ -234,6 +234,7 @@ module.exports = async function handler(req, res) {
           <button class="priority-button" type="button" data-priority="AUTO">AUTO</button>
           <button class="priority-button" type="button" data-priority="ARRIVAL">ARRIVAL PRIORITY</button>
           <button class="priority-button" type="button" data-priority="TAKEOFF">TAKEOFF PRIORITY</button>
+          <button class="priority-button" type="button" data-priority="RUNWAY">RUNWAY NOW</button>
         </div>
         <div id="priorityMessage" role="status" aria-live="polite">Automatic selection is active.</div>
       </div>
@@ -318,7 +319,7 @@ module.exports = async function handler(req, res) {
       if (!priorityBusy) {
         priorityMessage.textContent = priorityMode === "AUTO"
           ? "Automatic selection is active."
-          : (priorityMode === "ARRIVAL" ? "Arrivals" : "Takeoffs") + " have priority for " + remaining + " seconds.";
+          : (priorityMode === "ARRIVAL" ? "Arrival" : priorityMode === "RUNWAY" ? "Runway" : "Takeoff") + " priority is active for " + remaining + " seconds.";
         priorityMessage.className = priorityMode === "AUTO" ? "" : "warn";
       }
     }
