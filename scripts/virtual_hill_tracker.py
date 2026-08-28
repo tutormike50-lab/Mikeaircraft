@@ -8,6 +8,7 @@ import urllib.request
 from bleak import BleakClient
 
 TX = "0000fff5-0000-1000-8000-00805f9b34fb"
+RX = "0000fff4-0000-1000-8000-00805f9b34fb"
 DEVICE = "0C:9A:E6:FC:8E:73"
 ENGINE_URL = "https://mikeaircraft.vercel.app/api/engine?airport=PRG"
 
@@ -119,8 +120,6 @@ def current_target(data):
     current = intel.get("current") or {}
     aircraft = data.get("aircraft") or []
 
-    # MikeAircraft exposes CURRENT under intelligence, but the live aircraft
-    # telemetry list itself is top-level: payload.aircraft.
     current_id = current.get("id")
     current_hex = str(current.get("hex") or "").strip().lower()
     if current_id or current_hex:
@@ -132,9 +131,6 @@ def current_target(data):
                 if target:
                     return target
 
-    # Virtual-hill test fallback: if editorial CURRENT is temporarily empty,
-    # use the nearest live commercial aircraft from MikeAircraft. The engine's
-    # top-level list has already had private/non-commercial traffic filtered.
     candidates = []
     for ac in aircraft:
         target = make_target(ac, None, "NEAREST")
@@ -154,15 +150,23 @@ async def main():
     previous = None
     previous_time = None
     lock_started = None
+    tx_char = None
+
+    def receive(sender, data):
+        # Starting notifications forces the same reliable BLE service discovery
+        # path already proven by the working manual RS 4 controller.
+        pass
 
     async def send(tilt, pan):
         nonlocal sequence
         seq = sequence
         sequence += 1
-        await client.write_gatt_char(TX, packet(seq, tilt, pan), response=False)
+        if tx_char is None:
+            raise RuntimeError("RS 4 TX characteristic not ready")
+        await client.write_gatt_char(tx_char, packet(seq, tilt, pan), response=False)
 
     async def stop_motion():
-        if client.is_connected:
+        if client.is_connected and tx_char is not None:
             for _ in range(5):
                 try:
                     await send(0, 0)
@@ -172,7 +176,14 @@ async def main():
 
     try:
         await asyncio.wait_for(client.connect(), 25)
-        print("RS 4 Bluetooth connected.", flush=True)
+        await asyncio.sleep(0.5)
+        await asyncio.wait_for(client.start_notify(RX, receive), 5)
+        tx_char = client.services.get_characteristic(TX)
+        if tx_char is None:
+            raise RuntimeError("RS 4 TX characteristic not found")
+        if tx_char.max_write_without_response_size < 22:
+            raise RuntimeError("RS 4 Bluetooth message size is too small")
+        print("RS 4 Bluetooth connected and ready.", flush=True)
         await stop_motion()
 
         while True:
