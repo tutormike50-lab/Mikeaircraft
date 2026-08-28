@@ -84,37 +84,69 @@ def fetch_engine():
         return json.loads(response.read().decode("utf-8"))
 
 
+def make_target(ac, current=None, source="CURRENT"):
+    lat, lon = ac.get("lat"), ac.get("lon")
+    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+        return None
+    if abs(lat) < 1 or abs(lon) < 1:
+        return None
+
+    distance = haversine_km(HILL_LAT, HILL_LON, lat, lon)
+    bearing = bearing_deg(HILL_LAT, HILL_LON, lat, lon)
+    altitude = ac.get("altitude")
+    if altitude is None:
+        altitude = ac.get("alt_baro")
+    if altitude == "ground":
+        altitude = HILL_ALT_M / 0.3048
+    elevation = elevation_deg(distance, altitude)
+
+    target_id = ac.get("id") or ac.get("hex")
+    callsign = ac.get("callsign") or ac.get("flight") or (current or {}).get("callsign") or target_id
+    state = ac.get("state") or (current or {}).get("state") or ""
+    return {
+        "id": target_id,
+        "callsign": str(callsign or target_id).strip(),
+        "distance": distance,
+        "bearing": bearing,
+        "elevation": elevation,
+        "state": state,
+        "source": source,
+    }
+
+
 def current_target(data):
     intel = data.get("intelligence") or {}
     current = intel.get("current") or {}
-    current_id = current.get("id") or current.get("hex")
-    if not current_id:
-        return None
-    for ac in intel.get("aircraft") or []:
-        if (ac.get("id") or ac.get("hex")) != current_id:
-            continue
-        lat, lon = ac.get("lat"), ac.get("lon")
-        if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
-            return None
-        if abs(lat) < 1 or abs(lon) < 1:
-            return None
-        distance = haversine_km(HILL_LAT, HILL_LON, lat, lon)
-        bearing = bearing_deg(HILL_LAT, HILL_LON, lat, lon)
-        elevation = elevation_deg(distance, ac.get("altitude"))
-        return {
-            "id": current_id,
-            "callsign": ac.get("callsign") or current.get("callsign") or current_id,
-            "distance": distance,
-            "bearing": bearing,
-            "elevation": elevation,
-            "state": ac.get("state") or current.get("state") or "",
-        }
-    return None
+    aircraft = data.get("aircraft") or []
+
+    # MikeAircraft exposes CURRENT under intelligence, but the live aircraft
+    # telemetry list itself is top-level: payload.aircraft.
+    current_id = current.get("id")
+    current_hex = str(current.get("hex") or "").strip().lower()
+    if current_id or current_hex:
+        for ac in aircraft:
+            ac_id = ac.get("id")
+            ac_hex = str(ac.get("hex") or "").strip().lower()
+            if (current_id and ac_id == current_id) or (current_hex and ac_hex == current_hex):
+                target = make_target(ac, current, "CURRENT")
+                if target:
+                    return target
+
+    # Virtual-hill test fallback: if editorial CURRENT is temporarily empty,
+    # use the nearest live commercial aircraft from MikeAircraft. The engine's
+    # top-level list has already had private/non-commercial traffic filtered.
+    candidates = []
+    for ac in aircraft:
+        target = make_target(ac, None, "NEAREST")
+        if target:
+            candidates.append(target)
+    candidates.sort(key=lambda item: item["distance"])
+    return candidates[0] if candidates else None
 
 
 async def main():
     print("VIRTUAL HILL MODE", flush=True)
-    print("Waiting for MikeAircraft CURRENT within 8 km of Hostivice hill...", flush=True)
+    print("Waiting for MikeAircraft CURRENT/nearest commercial aircraft within 8 km of Hostivice hill...", flush=True)
 
     client = BleakClient(DEVICE, timeout=20)
     sequence = 0x6200
@@ -157,9 +189,9 @@ async def main():
                 if not target or target["distance"] > LOCK_RANGE_KM:
                     await stop_motion()
                     if target:
-                        print(f"Waiting: {target['callsign']} {target['distance']:.1f} km from virtual hill", flush=True)
+                        print(f"Waiting: {target['callsign']} {target['distance']:.1f} km from virtual hill ({target['source']})", flush=True)
                     else:
-                        print("Waiting: no suitable CURRENT aircraft", flush=True)
+                        print("Waiting: no suitable live aircraft", flush=True)
                     await asyncio.sleep(1.0)
                     continue
 
@@ -169,7 +201,7 @@ async def main():
                 lock_started = previous_time
                 print(
                     f"LOCKED {target['callsign']}  {target['state']}  {target['distance']:.1f} km  "
-                    f"bearing {target['bearing']:.1f} deg  elevation {target['elevation']:.1f} deg",
+                    f"bearing {target['bearing']:.1f} deg  elevation {target['elevation']:.1f} deg  [{target['source']}]",
                     flush=True,
                 )
                 print("Gimbal's present position is the starting reference for this simulation.", flush=True)
@@ -179,7 +211,7 @@ async def main():
 
             if not target or target["id"] != locked or target["distance"] > DROP_RANGE_KM:
                 await stop_motion()
-                print("Target left tracking window or CURRENT changed. Test finished.", flush=True)
+                print("Target left tracking window or MikeAircraft target changed. Test finished.", flush=True)
                 break
 
             now = time.monotonic()
