@@ -34,8 +34,51 @@ def state_of(ac, current=None):
     return str(ac.get("state") or (current or {}).get("state") or "").strip().upper()
 
 
-def is_active(ac, current=None):
-    return state_of(ac, current) in ACTIVE_STATES
+def number(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def gimbal_state(ac, current=None):
+    state = state_of(ac, current)
+    if state in ACTIVE_STATES:
+        return state
+
+    # The main editorial engine can deliberately leave an aircraft as AIRBORNE
+    # until it has enough history for a broadcast-safe arrival/departure label.
+    # The gimbal test may infer only very strong geometry so we do not miss an
+    # obvious aligned approach while testing physical tracking.
+    if state != "AIRBORNE":
+        return None
+
+    distance = number(ac.get("airportDistance", ac.get("distanceKm")))
+    alignment = number(ac.get("runwayAlignment"))
+    altitude = number(ac.get("altitude"))
+    speed = number(ac.get("speed"))
+    vertical_rate = number(ac.get("verticalRate"))
+
+    if None not in (distance, alignment, altitude, speed, vertical_rate):
+        if (
+            distance <= 22.0
+            and alignment <= 20.0
+            and 500.0 <= altitude <= 16000.0
+            and 120.0 <= speed <= 330.0
+            and vertical_rate <= -300.0
+        ):
+            return "APPROACHING"
+
+        if (
+            distance <= 6.0
+            and alignment <= 30.0
+            and 50.0 <= altitude <= 5000.0
+            and speed >= 100.0
+            and vertical_rate >= 300.0
+        ):
+            return "DEPARTING"
+
+    return None
 
 
 def same_aircraft(ac, target_id=None, target_hex=None):
@@ -52,38 +95,40 @@ def choose_from_engine(data):
 
     if current_id or current_hex:
         for ac in aircraft:
-            if same_aircraft(ac, current_id, current_hex) and is_active(ac, current):
+            derived_state = gimbal_state(ac, current)
+            if same_aircraft(ac, current_id, current_hex) and derived_state:
                 target = base.make_target(ac, current, "CURRENT_ACTIVE")
                 if target and clean_hex(ac.get("hex")):
                     return {
                         "id": ac.get("id") or target.get("id"),
                         "hex": clean_hex(ac.get("hex")),
                         "callsign": target.get("callsign") or clean_hex(ac.get("hex")),
-                        "state": state_of(ac, current),
+                        "state": derived_state,
                         "distance": target.get("distance"),
                     }
 
     candidates = []
     for ac in aircraft:
-        if not is_active(ac):
+        derived_state = gimbal_state(ac)
+        if not derived_state:
             continue
         hx = clean_hex(ac.get("hex"))
         if not hx:
             continue
         target = base.make_target(ac, None, "NEAREST_ACTIVE")
         if target:
-            candidates.append((target, ac))
+            candidates.append((target, ac, derived_state))
 
-    candidates.sort(key=lambda pair: pair[0]["distance"])
+    candidates.sort(key=lambda row: row[0]["distance"])
     if not candidates:
         return None
 
-    target, ac = candidates[0]
+    target, ac, derived_state = candidates[0]
     return {
         "id": ac.get("id") or target.get("id"),
         "hex": clean_hex(ac.get("hex")),
         "callsign": target.get("callsign") or clean_hex(ac.get("hex")),
-        "state": state_of(ac),
+        "state": derived_state,
         "distance": target.get("distance"),
     }
 
