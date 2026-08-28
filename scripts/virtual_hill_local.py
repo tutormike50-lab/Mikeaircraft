@@ -23,7 +23,7 @@ LOCAL_JSON_PATHS = [
 ]
 LOCAL_HTTP = "http://127.0.0.1/dump1090/data/aircraft.json"
 LOCAL_SAMPLE_SECONDS = 0.35
-LOCAL_STALE_SECONDS = 3.0
+LOCAL_STALE_SECONDS = 5.0
 
 
 def clean_hex(value):
@@ -46,10 +46,6 @@ def gimbal_state(ac, current=None):
     if state in ACTIVE_STATES:
         return state
 
-    # The main editorial engine can deliberately leave an aircraft as AIRBORNE
-    # until it has enough history for a broadcast-safe arrival/departure label.
-    # The gimbal test may infer only very strong geometry so we do not miss an
-    # obvious aligned approach while testing physical tracking.
     if state != "AIRBORNE":
         return None
 
@@ -134,20 +130,29 @@ def choose_from_engine(data):
 
 
 def read_local_feed():
-    for path in LOCAL_JSON_PATHS:
-        try:
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as handle:
-                    data = json.load(handle)
-                if isinstance(data.get("aircraft"), list):
-                    return data
-        except Exception:
-            pass
+    # dump1090 rewrites aircraft.json frequently. A read can very occasionally
+    # land between truncate/write, so retry locally before falling back to HTTP.
+    for _ in range(4):
+        for path in LOCAL_JSON_PATHS:
+            try:
+                if os.path.exists(path):
+                    with open(path, "r", encoding="utf-8") as handle:
+                        text = handle.read()
+                    if not text.strip():
+                        continue
+                    data = json.loads(text)
+                    if isinstance(data.get("aircraft"), list):
+                        return data
+            except (OSError, EOFError, json.JSONDecodeError):
+                pass
+        time.sleep(0.03)
 
     req = urllib.request.Request(LOCAL_HTTP, headers={"User-Agent": "MikeAircraft-Local-Gimbal"})
     with urllib.request.urlopen(req, timeout=2) as response:
-        data = json.loads(response.read().decode("utf-8"))
-    return data
+        payload = response.read().decode("utf-8")
+    if not payload.strip():
+        raise EOFError("empty local ADS-B response")
+    return json.loads(payload)
 
 
 def local_target(selection):
@@ -160,7 +165,6 @@ def local_target(selection):
         local["id"] = selection.get("id") or selection["hex"]
         local["callsign"] = str(ac.get("flight") or selection.get("callsign") or selection["hex"]).strip()
         local["state"] = selection.get("state") or "ACTIVE"
-
         if local.get("altitude") is None:
             local["altitude"] = local.get("alt_baro")
         return base.make_target(local, selection, "LOCAL_PI")
@@ -171,9 +175,9 @@ async def main():
     print("VIRTUAL HILL - LOCAL ADS-B MODE", flush=True)
     print("MikeAircraft chooses the aircraft; Pi local ADS-B drives the gimbal.", flush=True)
 
-    client = BleakClient(base.DEVICE, timeout=20)
-    sequence = 0x7200
+    client = None
     tx_char = None
+    sequence = 0x7200
     selection = None
     locked = False
     previous = None
@@ -184,24 +188,16 @@ async def main():
     def receive(sender, data):
         pass
 
-    async def send(tilt, pan):
-        nonlocal sequence
-        seq = sequence
-        sequence += 1
-        if tx_char is None:
-            raise RuntimeError("RS 4 TX characteristic not ready")
-        await client.write_gatt_char(tx_char, base.packet(seq, tilt, pan), response=False)
-
-    async def stop_motion():
-        if client.is_connected and tx_char is not None:
-            for _ in range(5):
-                try:
-                    await send(0, 0)
-                except Exception:
-                    pass
-                await asyncio.sleep(0.05)
-
-    try:
+    async def connect_ble(label="RS 4 Bluetooth connected and ready."):
+        nonlocal client, tx_char
+        if client is not None:
+            try:
+                if client.is_connected:
+                    await asyncio.wait_for(client.disconnect(), 3)
+            except Exception:
+                pass
+        tx_char = None
+        client = BleakClient(base.DEVICE, timeout=20)
         await asyncio.wait_for(client.connect(), 25)
         await asyncio.sleep(0.5)
         await asyncio.wait_for(client.start_notify(base.RX, receive), 5)
@@ -210,7 +206,40 @@ async def main():
             raise RuntimeError("RS 4 TX characteristic not found")
         if tx_char.max_write_without_response_size < 22:
             raise RuntimeError("RS 4 Bluetooth message size is too small")
-        print("RS 4 Bluetooth connected and ready.", flush=True)
+        print(label, flush=True)
+
+    async def send(tilt, pan):
+        nonlocal sequence
+        if client is None or not client.is_connected or tx_char is None:
+            raise EOFError("RS 4 Bluetooth link unavailable")
+        seq = sequence
+        sequence += 1
+        await client.write_gatt_char(tx_char, base.packet(seq, tilt, pan), response=False)
+
+    async def stop_motion():
+        if client is None or tx_char is None:
+            return
+        for _ in range(5):
+            try:
+                await send(0, 0)
+            except Exception:
+                break
+            await asyncio.sleep(0.05)
+
+    async def recover_ble():
+        print("Bluetooth hiccup - reconnecting RS 4...", flush=True)
+        for attempt in range(1, 4):
+            try:
+                await connect_ble(f"RS 4 reconnected (attempt {attempt}).")
+                await stop_motion()
+                return True
+            except Exception:
+                await asyncio.sleep(0.7)
+        print("Could not reconnect RS 4 after 3 attempts. Test finished.", flush=True)
+        return False
+
+    try:
+        await connect_ble()
         await stop_motion()
 
         while selection is None:
@@ -235,6 +264,8 @@ async def main():
         while True:
             try:
                 target = await asyncio.to_thread(local_target, selection)
+            except (EOFError, OSError, json.JSONDecodeError):
+                target = None
             except Exception:
                 target = None
 
@@ -244,9 +275,9 @@ async def main():
                 if last_local_seen is None:
                     print(f"Waiting for {selection['callsign']} in local ADS-B feed...", flush=True)
                 elif now - last_local_seen > LOCAL_STALE_SECONDS:
-                    print("Local ADS-B target lost for more than 3 seconds. Test finished.", flush=True)
+                    print("Local ADS-B target lost for more than 5 seconds. Test finished.", flush=True)
                     break
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.35)
                 continue
 
             last_local_seen = now
@@ -260,11 +291,6 @@ async def main():
                     )
                     await asyncio.sleep(0.5)
                     continue
-
-                if target["distance"] > base.DROP_RANGE_KM:
-                    await stop_motion()
-                    print("Target outside tracking window. Test finished.", flush=True)
-                    break
 
                 locked = True
                 previous = target
@@ -285,19 +311,19 @@ async def main():
                 print("Target left the 10 km tracking window. Test finished.", flush=True)
                 break
 
-            altitude_raw = None
             try:
                 feed = await asyncio.to_thread(read_local_feed)
+                ground = False
                 for ac in feed.get("aircraft") or []:
                     if clean_hex(ac.get("hex")) == selection["hex"]:
-                        altitude_raw = ac.get("alt_baro")
+                        ground = ac.get("alt_baro") == "ground"
                         break
+                if ground:
+                    await stop_motion()
+                    print("Target is on the ground. Test finished.", flush=True)
+                    break
             except Exception:
                 pass
-            if altitude_raw == "ground":
-                await stop_motion()
-                print("Target is on the ground. Test finished.", flush=True)
-                break
 
             dt = max(0.2, now - previous_time)
             pan_rate = base.angle_delta(target["bearing"], previous["bearing"]) / dt
@@ -313,9 +339,17 @@ async def main():
             )
 
             deadline = time.monotonic() + LOCAL_SAMPLE_SECONDS
+            ble_ok = True
             while time.monotonic() < deadline:
-                await send(tilt_cmd, pan_cmd)
+                try:
+                    await send(tilt_cmd, pan_cmd)
+                except Exception:
+                    ble_ok = await recover_ble()
+                    break
                 await asyncio.sleep(0.05)
+
+            if not ble_ok:
+                break
 
             previous = target
             previous_time = now
@@ -334,9 +368,10 @@ async def main():
             await stop_motion()
         except Exception:
             pass
-        if client.is_connected:
+        if client is not None:
             try:
-                await asyncio.wait_for(client.disconnect(), 3)
+                if client.is_connected:
+                    await asyncio.wait_for(client.disconnect(), 3)
             except Exception:
                 pass
         print("Finished.", flush=True)
