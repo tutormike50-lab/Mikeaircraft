@@ -3,6 +3,8 @@ import asyncio
 import time
 import virtual_hill_local as tracker
 
+COOLDOWN_SECONDS = 15
+
 
 def run_once():
     asyncio.run(tracker.main())
@@ -21,9 +23,9 @@ if __name__ == "__main__":
         except Exception as error:
             print("Continuous tracker recovered from:", type(error).__name__, str(error), flush=True)
 
-        print("Waiting 3 seconds, then looking for the next aircraft...", flush=True)
+        print(f"RS 4 Bluetooth cooldown: waiting {COOLDOWN_SECONDS} seconds before the next aircraft...", flush=True)
         try:
-            time.sleep(3)
+            time.sleep(COOLDOWN_SECONDS)
         except KeyboardInterrupt:
             print("Stopped by user.", flush=True)
             break
