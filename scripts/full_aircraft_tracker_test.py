@@ -18,6 +18,8 @@ WINDOW_LON = 14.3060
 LOCK_RANGE_KM = 12.0
 DROP_RANGE_KM = 14.0
 MAX_TRACK_SECONDS = 300.0
+RIBBON_GRACE_SECONDS = 8.0
+RIBBON_CHECK_SECONDS = 1.0
 PAN_TOLERANCE_DEG = 1.2
 TILT_TOLERANCE_DEG = 0.8
 MAX_RELATIVE_TILT_DEG = 18.0
@@ -52,7 +54,7 @@ def tilt_command(error):
 
 async def main():
     print("FULL AIRCRAFT TRACKING TEST - PAN + TILT", flush=True)
-    print("Ctrl+C stops immediately. Target remains committed through landing (5-minute safety maximum).", flush=True)
+    print("Ctrl+C stops immediately. Tracker follows ribbon CURRENT with an 8-second dropout allowance.", flush=True)
 
     # Override the old virtual-hill reference for every local ADS-B calculation.
     base.HILL_LAT = WINDOW_LAT
@@ -258,6 +260,27 @@ async def main():
             await stop_motion()
             await asyncio.sleep(WAIT_SECONDS)
 
+    def same_ribbon_aircraft(selection, current):
+        if not selection or not current:
+            return False
+        selection_hex = tracker.clean_hex(selection.get("hex"))
+        current_hex = tracker.clean_hex(current.get("hex"))
+        if selection_hex and current_hex:
+            return selection_hex == current_hex
+        return str(selection.get("callsign") or "").strip().upper() == str(current.get("callsign") or "").strip().upper()
+
+    async def ribbon_status(selection):
+        try:
+            engine = await asyncio.wait_for(asyncio.to_thread(base.fetch_engine), 3.0)
+            current = abs_pan.current_selection(engine)
+        except Exception:
+            return "unknown", None
+        if same_ribbon_aircraft(selection, current):
+            return "same", current
+        if current:
+            return "changed", current
+        return "empty", None
+
     def target_is_on_ground(selection):
         try:
             feed = tracker.read_local_feed()
@@ -270,11 +293,28 @@ async def main():
         return False
 
     async def track_one(selection):
-        print(f"LOCKED {selection['callsign']} - committed through landing (up to 5 minutes)", flush=True)
+        print(f"LOCKED {selection['callsign']} - following ribbon CURRENT", flush=True)
         started = time.monotonic()
         missing_since = None
+        ribbon_missing_since = None
+        next_ribbon_check = 0.0
         while time.monotonic() - started < MAX_TRACK_SECONDS:
             await ensure_ble()
+            now = time.monotonic()
+            if now >= next_ribbon_check:
+                next_ribbon_check = now + RIBBON_CHECK_SECONDS
+                status, ribbon_current = await ribbon_status(selection)
+                if status == "same":
+                    ribbon_missing_since = None
+                elif status == "changed":
+                    print(f"Ribbon changed to {ribbon_current.get('callsign') or 'another aircraft'}. Ending current track.", flush=True)
+                    break
+                elif status == "empty":
+                    if ribbon_missing_since is None:
+                        ribbon_missing_since = now
+                    elif now - ribbon_missing_since >= RIBBON_GRACE_SECONDS:
+                        print("Ribbon CURRENT has been empty for 8 seconds. Ending track.", flush=True)
+                        break
             try:
                 target = await asyncio.wait_for(asyncio.to_thread(tracker.local_target, selection), 0.8)
             except Exception:
