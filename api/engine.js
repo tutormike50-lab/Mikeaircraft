@@ -17,4 +17,7 @@ if (!process.env.KV_REST_API_TOKEN && redisToken) {
   process.env.KV_REST_API_TOKEN = redisToken;
 }
 
-module.exports = require("../lib/pi-source-wrapper.js");
+// PRG readers now share one coherent decision snapshot for each Pi ADS-B feed.
+// This prevents overlay, broadcast and storyteller requests from each adding
+// duplicate movement-history samples and making competing CURRENT decisions.
+module.exports = require("../lib/engine-snapshot-wrapper.js");
