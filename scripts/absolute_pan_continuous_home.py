@@ -15,6 +15,27 @@ PAN_TOLERANCE_DEG = 1.5
 HOME_TIMEOUT_SECONDS = 20.0
 RECENT_SECONDS = 90.0
 WAIT_SECONDS = 0.8
+MAX_SMOOTH_PAN_SPEED = 180
+
+
+def smooth_pan_command(error):
+    magnitude = abs(error)
+    if magnitude <= PAN_TOLERANCE_DEG:
+        return 0
+    if magnitude > 60:
+        speed = MAX_SMOOTH_PAN_SPEED
+    elif magnitude > 30:
+        speed = 140
+    elif magnitude > 15:
+        speed = 100
+    elif magnitude > 7:
+        speed = 70
+    elif magnitude > 3:
+        speed = 45
+    else:
+        speed = 25
+    return speed if error > 0 else -speed
+
 
 
 async def main():
@@ -137,7 +158,7 @@ async def main():
             return False
 
         error = abs_pan.angle_error(desired_yaw, latest_yaw)
-        cmd = abs_pan.pan_command(error)
+        cmd = smooth_pan_command(error)
         print(
             f"{label} desired {desired_yaw:+.1f}  actual {latest_yaw:+.1f}  "
             f"error {error:+.1f}  pan {cmd:+d}",
@@ -152,9 +173,10 @@ async def main():
         while time.monotonic() < end:
             if latest_yaw is not None:
                 error = abs_pan.angle_error(desired_yaw, latest_yaw)
-                cmd = abs_pan.pan_command(error)
+                cmd = smooth_pan_command(error)
                 if cmd == 0:
-                    break
+                    await stop_motion()
+                    return True
             try:
                 await send_pan(cmd)
             except Exception:
@@ -162,8 +184,10 @@ async def main():
                 return False
             await asyncio.sleep(0.05)
 
-        await stop_motion()
-        return latest_yaw is not None and abs(abs_pan.angle_error(desired_yaw, latest_yaw)) <= PAN_TOLERANCE_DEG
+        reached = latest_yaw is not None and abs(abs_pan.angle_error(desired_yaw, latest_yaw)) <= PAN_TOLERANCE_DEG
+        if reached:
+            await stop_motion()
+        return reached
 
     async def return_home():
         print("AIRCRAFT TRACK COMPLETE. RETURNING TO TOWER NOW...", flush=True)
@@ -230,7 +254,7 @@ async def main():
             await ensure_ble()
 
             try:
-                target = await asyncio.to_thread(tracker.local_target, selection)
+                target = await asyncio.wait_for(asyncio.to_thread(tracker.local_target, selection), 0.7)
             except Exception:
                 target = None
 
