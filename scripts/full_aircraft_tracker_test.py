@@ -10,13 +10,18 @@ import virtual_hill_local as tracker
 import virtual_hill_absolute_pan as abs_pan
 
 
+# Temporary indoor test position: central Makovskeho, Praha-Repy.
+# The GPS module will replace this with the exact live camera position later.
+WINDOW_LAT = 50.0657
+WINDOW_LON = 14.3060
+
 LOCK_RANGE_KM = 12.0
 DROP_RANGE_KM = 14.0
 MAX_TRACK_SECONDS = 90.0
 PAN_TOLERANCE_DEG = 1.2
 TILT_TOLERANCE_DEG = 0.8
 MAX_RELATIVE_TILT_DEG = 18.0
-TOWER_HOME_ELEVATION_DEG = 2.0
+TOWER_HOME_ELEVATION_DEG = 1.0
 HOME_TIMEOUT_SECONDS = 30.0
 RECENT_SECONDS = 120.0
 WAIT_SECONDS = 0.8
@@ -35,7 +40,7 @@ def axis_command(error, tolerance, speeds):
 
 def pan_command(error):
     return axis_command(error, PAN_TOLERANCE_DEG, [
-        (60, 180), (30, 140), (15, 100), (7, 70), (3, 45), (0, 25)
+        (60, 100), (30, 85), (15, 65), (7, 48), (3, 34), (0, 20)
     ])
 
 
@@ -49,9 +54,14 @@ async def main():
     print("FULL AIRCRAFT TRACKING TEST - PAN + TILT", flush=True)
     print("Ctrl+C stops immediately. Target remains committed for up to 90 seconds.", flush=True)
 
+    # Override the old virtual-hill reference for every local ADS-B calculation.
+    base.HILL_LAT = WINDOW_LAT
+    base.HILL_LON = WINDOW_LON
     tower_bearing = base.bearing_deg(
-        base.HILL_LAT, base.HILL_LON, abs_pan.TOWER_LAT, abs_pan.TOWER_LON
+        WINDOW_LAT, WINDOW_LON, abs_pan.TOWER_LAT, abs_pan.TOWER_LON
     )
+    print(f"Camera location: Makovskeho Repy {WINDOW_LAT:.4f}, {WINDOW_LON:.4f}", flush=True)
+    print(f"Bearing from window to tower: {tower_bearing:.1f} deg", flush=True)
 
     client = None
     tx_char = None
