@@ -17,7 +17,7 @@ WINDOW_LON = 14.3060
 
 LOCK_RANGE_KM = 12.0
 DROP_RANGE_KM = 14.0
-MAX_TRACK_SECONDS = 90.0
+MAX_TRACK_SECONDS = 300.0
 PAN_TOLERANCE_DEG = 1.2
 TILT_TOLERANCE_DEG = 0.8
 MAX_RELATIVE_TILT_DEG = 18.0
@@ -52,7 +52,7 @@ def tilt_command(error):
 
 async def main():
     print("FULL AIRCRAFT TRACKING TEST - PAN + TILT", flush=True)
-    print("Ctrl+C stops immediately. Target remains committed for up to 90 seconds.", flush=True)
+    print("Ctrl+C stops immediately. Target remains committed through landing (5-minute safety maximum).", flush=True)
 
     # Override the old virtual-hill reference for every local ADS-B calculation.
     base.HILL_LAT = WINDOW_LAT
@@ -258,8 +258,19 @@ async def main():
             await stop_motion()
             await asyncio.sleep(WAIT_SECONDS)
 
+    def target_is_on_ground(selection):
+        try:
+            feed = tracker.read_local_feed()
+        except Exception:
+            return False
+        for ac in feed.get("aircraft") or []:
+            if tracker.clean_hex(ac.get("hex")) != selection.get("hex"):
+                continue
+            return ac.get("alt_baro") == "ground" or ac.get("alt_geom") == "ground"
+        return False
+
     async def track_one(selection):
-        print(f"LOCKED {selection['callsign']} - committed tracking for up to 90 seconds", flush=True)
+        print(f"LOCKED {selection['callsign']} - committed through landing (up to 5 minutes)", flush=True)
         started = time.monotonic()
         missing_since = None
         while time.monotonic() - started < MAX_TRACK_SECONDS:
@@ -278,6 +289,9 @@ async def main():
                 await asyncio.sleep(0.25)
                 continue
             missing_since = None
+            if await asyncio.to_thread(target_is_on_ground, selection):
+                print("Target has landed. Ending track.", flush=True)
+                break
             if target["distance"] > DROP_RANGE_KM:
                 print("Target left the 14 km tracking area. Ending track.", flush=True)
                 break
@@ -295,6 +309,8 @@ async def main():
                 flush=True,
             )
             await asyncio.sleep(0.10)
+        if time.monotonic() - started >= MAX_TRACK_SECONDS:
+            print("Five-minute safety limit reached. Ending track.", flush=True)
         await stop_motion()
 
     try:
