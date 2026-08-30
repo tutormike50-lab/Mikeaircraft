@@ -179,6 +179,23 @@ module.exports = async function handler(req, res) {
     .location-button:disabled{cursor:wait;opacity:.62}
     .location-note{margin:12px 0 0;color:#7893a6;font-size:12px;line-height:1.5}
     .footnote{margin:18px 4px 0;color:#6f8799;font-size:12px;line-height:1.5}
+    .framing-card{margin-top:22px}
+    .framing-layout{display:grid;grid-template-columns:260px 1fr;gap:28px;align-items:center}
+    .framing-pad{position:relative;width:240px;height:240px;margin:auto;border:2px solid #4283a8;border-radius:50%;background:radial-gradient(circle,#164569,#071827);touch-action:none;user-select:none;cursor:grab;outline-offset:5px}
+    .framing-pad::before,.framing-pad::after{content:'';position:absolute;background:#38657d;pointer-events:none}
+    .framing-pad::before{width:1px;height:90%;top:5%;left:50%}
+    .framing-pad::after{height:1px;width:90%;left:5%;top:50%}
+    .framing-pad[aria-disabled=true]{opacity:.4;cursor:not-allowed}
+    .framing-knob{position:absolute;left:calc(50% - 30px);top:calc(50% - 30px);width:60px;height:60px;border:2px solid #a7e3ff;border-radius:50%;background:linear-gradient(#3287ba,#104362);box-shadow:0 5px 18px #0008;pointer-events:none;z-index:1}
+    .framing-directions{display:flex;justify-content:center;gap:6px;margin-top:14px}
+    .framing-directions button{min-width:50px;min-height:48px;touch-action:none}
+    .framing-button,.framing-speed{border:1px solid #4382a5;border-radius:9px;background:#0a293f;color:white;padding:12px;cursor:pointer}
+    .framing-button:disabled{opacity:.4;cursor:not-allowed}
+    .framing-stop{border-color:#d77777;color:#ffd1d1;margin-left:8px}
+    .framing-readouts{display:flex;gap:25px;margin:20px 0;font-variant-numeric:tabular-nums}
+    .framing-readouts strong{display:block;margin-top:6px;font-size:24px;color:var(--blue-soft)}
+    #framingStatus{min-height:48px;line-height:1.5;margin:16px 0}
+    @media(max-width:600px){.framing-layout{grid-template-columns:1fr}.framing-stop{margin:8px 0 0}.framing-button{min-height:48px}}
     @media(max-width:700px){
       .statusbar{grid-template-columns:repeat(2,1fr)}
       .airportgrid{grid-template-columns:repeat(2,1fr)}
@@ -270,6 +287,38 @@ module.exports = async function handler(req, res) {
       </div>
     </section>
 
+    <section class="card framing-card" aria-labelledby="framingTitle">
+      <div class="cardhead">
+        <h2 id="framingTitle">Camera Framing Joystick</h2>
+        <p>Adjust the aircraft’s framing while automatic tracking continues. Release to keep the correction. Tower HOME is unchanged.</p>
+      </div>
+      <div class="cardbody framing-layout">
+        <div>
+          <div id="framingPad" class="framing-pad" tabindex="0" role="group" aria-label="Camera framing joystick. Drag or use arrow keys: right pans right, up tilts up." aria-disabled="true" aria-describedby="framingStatus">
+            <span id="framingKnob" class="framing-knob"></span>
+          </div>
+          <div class="framing-directions" aria-label="Camera direction buttons">
+            <button type="button" class="framing-button" data-frame-direction="ArrowLeft" aria-label="Pan camera left" disabled>←</button>
+            <button type="button" class="framing-button" data-frame-direction="ArrowUp" aria-label="Tilt camera up" disabled>↑</button>
+            <button type="button" class="framing-button" data-frame-direction="ArrowDown" aria-label="Tilt camera down" disabled>↓</button>
+            <button type="button" class="framing-button" data-frame-direction="ArrowRight" aria-label="Pan camera right" disabled>→</button>
+          </div>
+        </div>
+        <div>
+          <span class="statuslabel">TRACKED AIRCRAFT</span><strong id="framingTarget">No aircraft</strong>
+          <div class="framing-readouts">
+            <div><span class="statuslabel">PAN CORRECTION</span><strong id="framingPan">+0.00°</strong></div>
+            <div><span class="statuslabel">TILT CORRECTION</span><strong id="framingTilt">+0.00°</strong></div>
+          </div>
+          <label for="framingSpeed">Adjustment speed </label>
+          <select id="framingSpeed" class="framing-speed"><option value="fine">Fine</option><option value="normal">Normal</option></select>
+          <p id="framingStatus" role="status" aria-live="polite">Not connected. The Pi joystick-enabled tracker must be running first.</p>
+          <button type="button" id="framingConnect" class="framing-button">CONNECT JOYSTICK</button>
+          <button type="button" id="framingStop" class="framing-button framing-stop" disabled>REQUEST STOP</button>
+          <p class="location-note">Uses your private PIN above. Corrections are limited to ±5° for this run and start at zero on every new run. Readouts show corrections accepted by the controller, not visually verified framing. One small in-flight adjustment may settle after release. Network STOP is not a substitute for the gimbal’s physical stop.</p>
+        </div>
+      </div>
+    </section>
     <p class="footnote">The YoloBox remains display-only. Airport and camera settings are controlled here.</p>
   </main>
 
@@ -654,6 +703,7 @@ module.exports = async function handler(req, res) {
 
     loadSettings();
   </script>
+  <script src="/control-joystick.js" defer></script>
 </body>
 </html>`;
 
