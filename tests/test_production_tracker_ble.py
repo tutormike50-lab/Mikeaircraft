@@ -43,11 +43,20 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("disconnect_monotonic_s=12.500000", str(fault))
 
     def test_connection_probe_is_safe_during_cleanup(self):
+        class ConnectedClient:
+            is_connected = True
+
+        class DisconnectedClient:
+            is_connected = False
+
         class BrokenClient:
             @property
             def is_connected(self):
                 raise RuntimeError("backend already gone")
 
+        self.assertTrue(client_connected(ConnectedClient()))
+        self.assertFalse(client_connected(DisconnectedClient()))
+        self.assertFalse(client_connected(None))
         self.assertFalse(client_connected(BrokenClient()))
 
     def test_post_connect_disconnect_records_only_active_unexpected_client(self):

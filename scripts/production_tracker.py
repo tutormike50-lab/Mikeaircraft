@@ -46,6 +46,10 @@ def client_connected(client):
     """Read Bleak connection state without allowing cleanup checks to mask a fault."""
     if client is None:
         return False
+    try:
+        return bool(client.is_connected)
+    except Exception:
+        return False
 
 
 def effective_write_hz(count, first_write_at, sample_at):
@@ -53,10 +57,6 @@ def effective_write_hz(count, first_write_at, sample_at):
     if count < 2 or first_write_at is None or sample_at is None or sample_at <= first_write_at:
         return 0.0
     return (count - 1) / (sample_at - first_write_at)
-    try:
-        return bool(client.is_connected)
-    except Exception:
-        return False
 
 
 def make_disconnect_callback(get_client, is_intentional, on_disconnect):
@@ -327,6 +327,21 @@ async def run(args):
             tick = time.monotonic()
             now_ms = utc_ms()
             if disconnected_at is not None or not client_connected(client):
+                if disconnected_at is None:
+                    disconnected_at = tick
+                    disconnect_state = "observed_by_control_loop"
+                    diagnostics.event(
+                        "ble_disconnect_observed", state=disconnect_state,
+                        client_is_connected=False,
+                        connected_elapsed_s=(tick - connected_at
+                                             if connected_at is not None else None),
+                        last_successful_write_monotonic_s=last_write_at,
+                        last_write_age_s=(tick - last_write_at
+                                          if last_write_at is not None else None),
+                        successful_write_count=write_count,
+                        effective_write_hz=effective_write_hz(
+                            write_count, first_write_at, tick),
+                        last_command=last_command)
                 bluetooth_state = "FAULT_DISCONNECTED"
                 raise BleLifecycleError("control_loop_precheck", "unexpected disconnect",
                                         disconnected_at)
