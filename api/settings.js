@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const { authorised } = require("../lib/control-auth");
 
 const VERSION = "0.4";
 const SETTINGS_KEY = "mikeaircraft:control:settings";
@@ -283,7 +284,7 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  if (!pinMatches(suppliedPin(req), expectedPin)) {
+  if (!authorised(req)) {
     return res.status(401).json({
       ok: false,
       error: "Incorrect control PIN"

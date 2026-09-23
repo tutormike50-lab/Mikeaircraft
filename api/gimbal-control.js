@@ -1,20 +1,12 @@
-const crypto = require('crypto');
 const { resolveRedisEnv } = require('../lib/services/redis');
 const { transition, view } = require('../lib/gimbal-control');
+const { authorised } = require('../lib/control-auth');
 const KEY = 'mikeaircraft:gimbal:framing:v1';
 const CAS = `local old=redis.call('GET',KEYS[1]) or ''
 if old~=ARGV[1] then return 0 end
 redis.call('SET',KEYS[1],ARGV[2],'PX',15000)
 return 1`;
 
-function authorised(req) {
-  const expected = process.env.MIKEAIRCRAFT_CONTROL_PIN;
-  if (!expected) return false;
-  const given = req.headers?.['x-mikeaircraft-control-pin'];
-  if (typeof given !== 'string' || given.length > 256) return false;
-  const a = Buffer.from(given), b = Buffer.from(expected);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
 async function command(args) {
   const { url, token } = resolveRedisEnv();
   if (!url || !token) throw new Error('Control storage unavailable');

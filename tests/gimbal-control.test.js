@@ -98,6 +98,21 @@ test('HTTP requires PIN, does not log it, rejects methods and malformed input', 
     ]) { const res = response(); await handler(req, res); assert.equal(res.code, code); }
   } finally { if (old === undefined) delete process.env.MIKEAIRCRAFT_CONTROL_PIN; else process.env.MIKEAIRCRAFT_CONTROL_PIN = old; }
 });
+test('trusted-browser cookie authenticates without exposing the PIN to control APIs', async () => {
+  const auth = require('../api/control-session');
+  const old = process.env.MIKEAIRCRAFT_CONTROL_PIN;
+  process.env.MIKEAIRCRAFT_CONTROL_PIN = 'unit-test-only';
+  try {
+    const login = response();
+    login.setHeader = function (key, value) { if (key === 'Set-Cookie') this.cookie = value; };
+    await auth({ method: 'POST', headers: {}, body: { pin: 'unit-test-only' } }, login);
+    assert.equal(login.code, 200); assert.match(login.cookie, /HttpOnly; Secure; SameSite=Strict/);
+    assert.doesNotMatch(login.cookie, /unit-test-only/);
+    const check = response();
+    await auth({ method: 'GET', headers: { cookie: login.cookie } }, check);
+    assert.equal(check.code, 200); assert.equal(check.body.ok, true);
+  } finally { if (old === undefined) delete process.env.MIKEAIRCRAFT_CONTROL_PIN; else process.env.MIKEAIRCRAFT_CONTROL_PIN = old; }
+});
 test('handler uses atomic compare-and-set with no changes to the settings key', async () => {
   const prior = { pin: process.env.MIKEAIRCRAFT_CONTROL_PIN, url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN, fetch: global.fetch };
   process.env.MIKEAIRCRAFT_CONTROL_PIN = 'unit-test-only';

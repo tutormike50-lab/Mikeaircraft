@@ -2,6 +2,7 @@ module.exports = async function handler(req, res) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
 
+  const calibrationPage = req.query?.page === "calibration";
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -55,6 +56,8 @@ module.exports = async function handler(req, res) {
     h1{margin:0;font-size:clamp(22px,4vw,31px)}
     .subtitle{margin:5px 0 0;color:#b6d7e9;font-size:14px}
     main{width:min(980px,100%);margin:0 auto;padding:28px clamp(16px,4vw,34px) 44px}
+    .page-nav{display:flex;gap:10px;margin-bottom:22px}.page-nav a{padding:11px 14px;border:1px solid #346483;border-radius:10px;color:var(--blue-soft);text-decoration:none;font-weight:800}.page-nav a[aria-current=page]{border-color:var(--green);color:var(--green);background:#0b3b42}
+    .normal-page .calibration-only,.calibration-page .operations-only{display:none}
     .statusbar{
       display:grid;
       grid-template-columns:repeat(4,1fr);
@@ -220,7 +223,7 @@ module.exports = async function handler(req, res) {
     }
   </style>
 </head>
-<body>
+<body class="${calibrationPage ? "calibration-page" : "normal-page"}">
   <header class="topbar">
     <div class="tower" aria-hidden="true">
       <svg viewBox="0 0 40 40"><path d="M13 10h14l3 6H10l3-6Z"/><path d="M14 16h12l-2 7h-8l-2-7Z"/><path d="M17 23h6l3 14H14l3-14Z"/><path d="M8 37h24"/><path d="M20 5v5"/><path d="M17 5h6"/></svg>
@@ -232,7 +235,16 @@ module.exports = async function handler(req, res) {
   </header>
 
   <main>
-    <section class="statusbar" aria-label="Control status">
+    <nav class="page-nav" aria-label="Control Panel pages"><a href="/api/control" ${calibrationPage ? "" : "aria-current=\"page\""}>Field Controls</a><a href="/api/camera-calibration" ${calibrationPage ? "aria-current=\"page\"" : ""}>Camera Calibration</a></nav>
+    <section class="card" style="margin-bottom:22px">
+      <div class="cardbody">
+        <div class="pinrow" style="margin-bottom:0">
+          <input id="pin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Private control PIN — first use only" aria-label="Private control PIN">
+          <span id="lockStatus" class="lock-status">CHECKING</span>
+        </div>
+      </div>
+    </section>
+    <section class="statusbar operations-only" aria-label="Control status">
       <div class="statusitem">
         <span class="statuslabel">SELECTED AIRPORT</span>
         <span id="currentAirport" class="statusvalue">---</span>
@@ -251,22 +263,18 @@ module.exports = async function handler(req, res) {
       </div>
     </section>
 
-    <section class="card">
+    <section class="card operations-only">
       <div class="cardhead">
         <h2>Airport</h2>
-        <p>Enter your private PIN, then choose the airport for MikeAircraft.</p>
+        <p>Choose the airport for MikeAircraft. This trusted browser stays signed in after the first PIN entry.</p>
       </div>
       <div class="cardbody">
-        <div class="pinrow">
-          <input id="pin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Private control PIN" aria-label="Private control PIN">
-          <span id="lockStatus" class="lock-status">LOCKED</span>
-        </div>
         <div id="airportGrid" class="airportgrid" aria-label="Available airports"></div>
         <div id="message" role="status" aria-live="polite">Loading the saved setting…</div>
       </div>
     </section>
 
-    <section class="card priority-card">
+    <section class="card priority-card operations-only">
       <div class="cardhead">
         <h2>Live Aircraft Priority</h2>
         <p>Use the PIN above to change which live movement gets the ribbon. A manual choice returns to AUTO after two minutes.</p>
@@ -282,14 +290,14 @@ module.exports = async function handler(req, res) {
       </div>
     </section>
 
-    <section class="card location-card">
+    <section class="card location-card calibration-only">
       <div class="cardhead">
-        <h2>Camera Location</h2>
-        <p>Take this laptop or phone beside the camera, then reset its position for aircraft tracking.</p>
+        <h2>Camera Calibration</h2>
+        <p>Take this phone beside the camera to calibrate its position, true heading and elevation.</p>
       </div>
       <div class="cardbody">
         <div class="location-summary">
-          <span class="location-label">CAMERA POSITION</span>
+          <span class="location-label">POSITION</span>
           <span id="cameraLocationStatus" class="location-value warn">CHECKING</span>
         </div>
         <div class="location-summary"><span class="location-label">HEADING</span><span id="headingStatus" class="location-value warn">NOT READY</span></div>
@@ -308,7 +316,7 @@ module.exports = async function handler(req, res) {
       </div>
     </section>
 
-    <section class="card framing-card" aria-labelledby="framingTitle">
+    <section class="card framing-card operations-only" aria-labelledby="framingTitle">
       <div class="cardhead">
         <h2 id="framingTitle">Camera Framing Joystick</h2>
         <p>Adjust the aircraft’s framing while automatic tracking continues. Release to keep the correction. Tower HOME is unchanged.</p>
@@ -335,8 +343,9 @@ module.exports = async function handler(req, res) {
           <select id="framingSpeed" class="framing-speed"><option value="fine">Fine</option><option value="normal">Normal</option></select>
           <p id="framingStatus" role="status" aria-live="polite">Not connected. The Pi joystick-enabled tracker must be running first.</p>
           <button type="button" id="framingConnect" class="framing-button">CONNECT JOYSTICK</button>
+          <button type="button" id="framingReset" class="framing-button" disabled>CENTRE TRIM</button>
           <button type="button" id="framingStop" class="framing-button framing-stop" disabled>REQUEST STOP</button>
-          <p class="location-note">Uses your private PIN above. Corrections are limited to ±5° for this run and start at zero on every new run. Readouts show corrections accepted by the controller, not visually verified framing. One small in-flight adjustment may settle after release. Network STOP is not a substitute for the gimbal’s physical stop.</p>
+          <p class="location-note">Corrections are gently rate-limited and bounded to ±5° for this run. Release retains the trim; CENTRE TRIM smoothly returns it to zero. AUTO tracking remains authoritative and Tower HOME is unchanged. Network STOP is not a substitute for the gimbal’s physical stop.</p>
         </div>
       </div>
     </section>
@@ -381,27 +390,47 @@ module.exports = async function handler(req, res) {
     let orientationListener = null;
     let orientationReason = "Orientation has not been requested.";
 
-    const pinStorageKey = "mikeaircraft-control-pin";
-    pinInput.value = sessionStorage.getItem(pinStorageKey) || "";
+    let sessionUnlocked = false;
 
     function setLockStatus(unlocked) {
-      lockStatus.textContent = unlocked ? "UNLOCKED" : "LOCKED";
+      lockStatus.textContent = unlocked ? "TRUSTED BROWSER" : "LOCKED";
       lockStatus.className = "lock-status" + (unlocked ? " unlocked" : "");
+      pinInput.hidden = unlocked;
     }
 
     function rememberPin(pin) {
-      sessionStorage.setItem(pinStorageKey, pin);
-      pinInput.value = pin;
+      sessionUnlocked = true;
+      pinInput.value = "";
       setLockStatus(true);
     }
 
     function forgetPin() {
-      sessionStorage.removeItem(pinStorageKey);
+      sessionUnlocked = false;
       pinInput.value = "";
       setLockStatus(false);
     }
 
-    setLockStatus(Boolean(pinInput.value));
+    async function ensureAuthentication() {
+      if (sessionUnlocked) return true;
+      const pin = pinInput.value.trim();
+      if (!pin) { pinInput.focus(); return false; }
+      const response = await fetch("/api/control-session", { method: "POST", cache: "no-store",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pin }) });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Sign-in failed");
+      rememberPin(pin);
+      return true;
+    }
+
+    async function loadAuthentication() {
+      try {
+        const response = await fetch("/api/control-session", { cache: "no-store" });
+        sessionUnlocked = response.ok;
+      } catch { sessionUnlocked = false; }
+      setLockStatus(sessionUnlocked);
+    }
+
+    setLockStatus(false);
 
     function setMessage(text, tone) {
       message.textContent = text;
@@ -513,12 +542,8 @@ module.exports = async function handler(req, res) {
       }
 
       const pin = pinInput.value.trim();
-
-      if (!pin) {
-        pinInput.focus();
-        setMessage("Enter your private control PIN first.", "warn");
-        return;
-      }
+      try { if (!await ensureAuthentication()) { setMessage("Enter your private control PIN once for this browser.", "warn"); return; } }
+      catch (error) { forgetPin(); setMessage(error.message, "bad"); return; }
 
       busy = true;
       panelStatus.textContent = "SAVING";
@@ -531,8 +556,7 @@ module.exports = async function handler(req, res) {
           method: "POST",
           cache: "no-store",
           headers: {
-            "Content-Type": "application/json",
-            "X-MikeAircraft-Control-Pin": pin
+            "Content-Type": "application/json"
           },
           body: JSON.stringify({ airport: code })
         });
@@ -569,12 +593,8 @@ module.exports = async function handler(req, res) {
       let priorityError = null;
 
       const pin = pinInput.value.trim();
-      if (!pin) {
-        pinInput.focus();
-        priorityMessage.textContent = "Enter your private control PIN above first.";
-        priorityMessage.className = "warn";
-        return;
-      }
+      try { if (!await ensureAuthentication()) { priorityMessage.textContent = "Enter your private control PIN once for this browser."; priorityMessage.className = "warn"; return; } }
+      catch (error) { forgetPin(); priorityMessage.textContent = error.message; priorityMessage.className = "bad"; return; }
 
       priorityBusy = true;
       panelStatus.textContent = "SAVING";
@@ -588,8 +608,7 @@ module.exports = async function handler(req, res) {
           method: "POST",
           cache: "no-store",
           headers: {
-            "Content-Type": "application/json",
-            "X-MikeAircraft-Control-Pin": pin
+            "Content-Type": "application/json"
           },
           body: JSON.stringify({ priorityMode: mode })
         });
@@ -677,8 +696,7 @@ module.exports = async function handler(req, res) {
           method: "POST",
           cache: "no-store",
           headers: {
-            "Content-Type": "application/json",
-            "X-MikeAircraft-Control-Pin": pin
+            "Content-Type": "application/json"
           },
           body: JSON.stringify({
             cameraLocation: {
@@ -782,11 +800,8 @@ module.exports = async function handler(req, res) {
         return;
       }
 
-      if (!pinInput.value.trim()) {
-        pinInput.focus();
-        setLocationMessage("Enter your private control PIN first.", "warn");
-        return;
-      }
+      try { if (!await ensureAuthentication()) { setLocationMessage("Enter your private control PIN once for this browser.", "warn"); return; } }
+      catch (error) { forgetPin(); setLocationMessage(error.message, "bad"); return; }
 
       if (!navigator.geolocation) {
         setLocationMessage("This browser does not support location capture. Open the Control Panel on a phone or modern browser.", "bad");
@@ -849,13 +864,14 @@ module.exports = async function handler(req, res) {
 
     resetLocationButton.addEventListener("click", resetCameraLocation);
     pinInput.addEventListener("input", () => {
-      setLockStatus(Boolean(pinInput.value) && pinInput.value === sessionStorage.getItem(pinStorageKey));
+      if (!sessionUnlocked) setLockStatus(false);
     });
     priorityButtons.forEach((button) => {
       button.addEventListener("click", () => savePriority(button.dataset.priority));
     });
     setInterval(renderPriority, 1000);
 
+    loadAuthentication();
     loadSettings();
   </script>
   <script src="/control-joystick.js" defer></script>

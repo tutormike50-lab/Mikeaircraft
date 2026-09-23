@@ -4,17 +4,17 @@
   const el = id => document.getElementById(id);
   const pad = el('framingPad'), knob = el('framingKnob'), status = el('framingStatus');
   if (!pad) return;
-  const connect = el('framingConnect'), stop = el('framingStop');
+  const connect = el('framingConnect'), stop = el('framingStop'), reset = el('framingReset');
   const speed = el('framingSpeed'), pin = el('pin');
   const buttons = Array.from(document.querySelectorAll('[data-frame-direction]'));
   let state = null, checkedAt = 0, enabled = false, busy = false;
-  let vector = { x: 0, y: 0 }, pointer = null, heldKey = null, pollTimer = null;
+  let vector = { x: 0, y: 0 }, pointer = null, heldKey = null, pollTimer = null, resetting = false;
   let epoch = 0, lastStep = performance.now();
   const directions = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
   const clamp = (v, n) => Math.max(-n, Math.min(n, v));
   function message(text, bad) { status.textContent = text; status.className = bad ? 'bad' : 'warn'; }
   function release() {
-    vector = { x: 0, y: 0 }; heldKey = null;
+    vector = { x: 0, y: 0 }; heldKey = null; resetting = false;
     const captured = pointer; pointer = null;
     if (captured !== null && pad.hasPointerCapture?.(captured)) pad.releasePointerCapture(captured);
     knob.style.transform = 'translate(0px, 0px)';
@@ -27,6 +27,7 @@
     const can = ready();
     pad.setAttribute('aria-disabled', String(!can));
     buttons.forEach(b => { b.disabled = !can; });
+    reset.disabled = !can || (!resetting && !(state?.applied?.pan || state?.applied?.tilt));
     stop.disabled = !enabled || !state?.connected || state?.stopRequested;
     const signed = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '°';
     el('framingPan').textContent = signed(state?.applied?.pan || 0);
@@ -40,6 +41,9 @@
       message('New controller session. Check framing, then reconnect the joystick.');
     }
     state = data; checkedAt = performance.now();
+    if (resetting && Math.abs(data.applied?.pan || 0) < 0.01 && Math.abs(data.applied?.tilt || 0) < 0.01) {
+      resetting = false; vector = { x: 0, y: 0 };
+    }
     if (enabled) {
       message(data.stopRequested ? 'STOP requested. Check the camera has stopped; use physical STOP if needed.' :
         !data.connected ? 'Pi controller not connected. No camera commands can be sent.' :
@@ -51,8 +55,8 @@
     paint();
   }
   async function request(body) {
-    const headers = { 'X-MikeAircraft-Control-Pin': pin.value.trim() };
-    if (!headers['X-MikeAircraft-Control-Pin']) throw new Error('Enter the private control PIN above first.');
+    const headers = {};
+    if (pin.value.trim()) headers['X-MikeAircraft-Control-Pin'] = pin.value.trim();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2500);
     try {
@@ -75,16 +79,20 @@
     const turn = epoch;
     try {
       let body;
+      if (resetting && ready() && !state.command) {
+        const pan = state.applied.pan, tilt = state.applied.tilt;
+        vector = { x: Math.abs(pan) < 0.01 ? 0 : -Math.sign(pan), y: Math.abs(tilt) < 0.01 ? 0 : -Math.sign(tilt) };
+      }
       const moving = vector.x || vector.y;
       if (moving && ready() && !state.command) {
         const now = performance.now();
-        const dt = Math.min(0.25, Math.max(0, (now - lastStep) / 1000)); lastStep = now;
-        const rate = speed.value === 'normal' ? 0.8 : 0.2;
+        const dt = Math.min(0.25, Math.max(0.02, (now - lastStep) / 1000)); lastStep = now;
+        const rate = resetting ? 0.2 : speed.value === 'normal' ? 0.8 : 0.2;
         const round = v => Math.round(clamp(v, 5) * 10000) / 10000;
         body = { action: 'trim', sessionId: state.sessionId, requestId: crypto.randomUUID(),
           expectedRevision: state.revision, validUntil: state.commandWindowUntil,
-          pan: round(state.applied.pan + vector.x * rate * dt),
-          tilt: round(state.applied.tilt + vector.y * rate * dt) };
+          pan: round(resetting && Math.abs(state.applied.pan) <= rate * dt ? 0 : state.applied.pan + vector.x * rate * dt),
+          tilt: round(resetting && Math.abs(state.applied.tilt) <= rate * dt ? 0 : state.applied.tilt + vector.y * rate * dt) };
       }
       const data = await request(body);
       if (turn === epoch) accept(data);
@@ -107,6 +115,11 @@
       state = data;
       message('STOP requested, not physically confirmed. Watch the camera; use physical STOP if needed.');
     } catch (error) { message('STOP could not be confirmed. Use the gimbal’s physical STOP/power.', true); }
+  });
+  reset.addEventListener('click', () => {
+    if (!ready() || state.command) return;
+    release(); resetting = true; lastStep = performance.now();
+    message('Gently centring the framing trim…'); pump();
   });
   function move(event) {
     const r = pad.getBoundingClientRect(), radius = r.width * 0.32;

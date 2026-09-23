@@ -30,3 +30,17 @@ test("rejected calibration returns before saving and preserves the previous posi
   assert.ok(rejection >= 0 && save > rejection);
   assert.match(html.slice(rejection, save), /previous saved position was preserved[\s\S]*return;/);
 });
+
+test("camera calibration has a dedicated route while field controls link to it", async () => {
+  const control = require("../api/control");
+  const calibration = require("../api/camera-calibration");
+  const render = async (handler) => { let html = ""; await handler({ query: {} }, { setHeader() {}, status() { return this; }, send(value) { html = value; } }); return html; };
+  const field = await render(control);
+  const page = await render(calibration);
+  assert.match(field, /class="normal-page"/);
+  assert.match(field, /href="\/api\/camera-calibration"/);
+  assert.match(page, /class="calibration-page"/);
+  assert.match(page, /<h2>Camera Calibration<\/h2>/);
+  assert.match(page, /POSITION[\s\S]*HEADING[\s\S]*ELEVATION/);
+  assert.match(page, /navigator\.geolocation\.watchPosition/);
+});

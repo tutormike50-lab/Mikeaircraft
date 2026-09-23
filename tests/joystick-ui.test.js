@@ -14,7 +14,7 @@ function element() {
   };
 }
 function setup() {
-  const ids = Object.fromEntries(['framingPad','framingKnob','framingStatus','framingConnect','framingStop','framingSpeed','framingPan','framingTilt','framingTarget','pin'].map(k => [k, element()]));
+  const ids = Object.fromEntries(['framingPad','framingKnob','framingStatus','framingConnect','framingStop','framingReset','framingSpeed','framingPan','framingTilt','framingTarget','pin'].map(k => [k, element()]));
   ids.pin.value = 'fake-pin'; ids.framingSpeed.value = 'normal';
   const buttons = ['ArrowLeft','ArrowUp','ArrowDown','ArrowRight'].map(key => ({ ...element(), dataset: { frameDirection: key } }));
   const document = { ...element(), hidden: false, getElementById: k => ids[k], querySelectorAll: () => buttons };
@@ -73,6 +73,17 @@ test('STOP is explicit and never claims physical confirmation', async () => {
   const s = setup(); await s.ids.framingConnect.emit('click'); await s.ids.framingStop.emit('click');
   assert.equal(s.calls.at(-1).body.action, 'stop');
   assert.match(s.ids.framingStatus.textContent, /not physically confirmed/);
+});
+test('centre trim requests gentle bounded steps toward zero', async () => {
+  const s = setup();
+  s.state({ applied: { revision: 4, pan: 1, tilt: -0.5 }, revision: 4 });
+  await s.ids.framingConnect.emit('click');
+  await s.ids.framingReset.emit('click');
+  s.tick(200); await s.runTimer();
+  const body = s.calls.filter(c => c.body?.action === 'trim').at(-1).body;
+  assert.ok(body.pan < 1 && body.pan >= 0.75);
+  assert.ok(body.tilt > -0.5 && body.tilt <= -0.25);
+  assert.ok(Math.abs(body.pan - 1) <= 0.25 && Math.abs(body.tilt + 0.5) <= 0.25);
 });
 test('existing panel still serves airport, priority and location controls', async () => {
   const handler = require('../api/control'); let html;
