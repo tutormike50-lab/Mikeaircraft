@@ -717,7 +717,7 @@ module.exports = async function handler(req, res) {
       if (!locationBusy || !calibrationSession) return;
       const snapshot = calibrationSession.snapshot();
       renderCalibration(snapshot);
-      if (!snapshot.minimumMet || !snapshot.estimate) {
+      if (!snapshot.acceptanceMet || !snapshot.estimate) {
         if (!force) return;
         stopLocationWatch();
         locationBusy = false;
@@ -725,7 +725,7 @@ module.exports = async function handler(req, res) {
         resetLocationButton.textContent = "TRY AUTO CALIBRATE AGAIN";
         cameraLocationStatus.textContent = "CALIBRATION CONFLICT";
         cameraLocationStatus.className = "location-value bad";
-        setLocationMessage("CALIBRATION CONFLICT — fewer than 20 fresh fixes were received in 180 seconds, so the previous saved position was preserved.", "bad");
+        setLocationMessage("CALIBRATION CONFLICT — the required fix count, accuracy, cluster, outlier, or stability conditions were not met in 180 seconds, so the previous saved position was preserved.", "bad");
         return;
       }
       if (snapshot.estimate.grade === "REJECT") {
@@ -739,7 +739,7 @@ module.exports = async function handler(req, res) {
         setLocationMessage("CALIBRATION CONFLICT — uncertainty remained above 20 m, so the previous saved position was preserved.", "bad");
         return;
       }
-      if (!force && !(snapshot.preferredMet && snapshot.stable)) return;
+      if (!force && !snapshot.acceptanceMet) return;
       stopLocationWatch();
       calibrationState.textContent = "POSITION CALIBRATED";
       calibrationState.className = "calibration-state good";
@@ -770,7 +770,7 @@ module.exports = async function handler(req, res) {
       calibrationTarget.classList.add("active");
       calibrationTarget.setAttribute("aria-hidden", "false");
       calibrationSession = CameraPositionCalibration.createSession(Date.now());
-      setLocationMessage("Keep the crosshair against the camera reference point. Collection takes at least 60 seconds and normally 90 seconds.", "warn");
+      setLocationMessage("Keep the crosshair against the camera reference point. Collection takes at least 60 seconds and continues up to 180 seconds if needed.", "warn");
 
       locationWatchId = navigator.geolocation.watchPosition(
         (position) => {
@@ -778,7 +778,7 @@ module.exports = async function handler(req, res) {
           const snapshot = calibrationSession.snapshot();
           renderCalibration(snapshot);
           cameraLocationStatus.textContent = snapshot.state;
-          if (snapshot.preferredMet && snapshot.stable && snapshot.estimate && snapshot.estimate.grade !== "REJECT") completeCalibration(false);
+          if (snapshot.acceptanceMet) completeCalibration(false);
         },
         (error) => {
           stopLocationWatch();
@@ -800,7 +800,7 @@ module.exports = async function handler(req, res) {
         renderCalibration(snapshot);
         cameraLocationStatus.textContent = snapshot.state;
         if (snapshot.elapsedSeconds >= 180) completeCalibration(true);
-        else if (snapshot.preferredMet && snapshot.stable && snapshot.estimate && snapshot.estimate.grade !== "REJECT") completeCalibration(false);
+        else if (snapshot.acceptanceMet) completeCalibration(false);
       }, 1000);
     }
 
