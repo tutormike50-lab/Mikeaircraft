@@ -46,6 +46,13 @@ def client_connected(client):
     """Read Bleak connection state without allowing cleanup checks to mask a fault."""
     if client is None:
         return False
+
+
+def effective_write_hz(count, first_write_at, sample_at):
+    """Return completed write intervals per second, without inflating short samples."""
+    if count < 2 or first_write_at is None or sample_at is None or sample_at <= first_write_at:
+        return 0.0
+    return (count - 1) / (sample_at - first_write_at)
     try:
         return bool(client.is_connected)
     except Exception:
@@ -148,6 +155,10 @@ class Diagnostics:
             "measured_rs4_yaw_deg": telemetry.get("measured_yaw"),
             "measured_rs4_pitch_deg": telemetry.get("measured_pitch"),
             "rs4_telemetry_age_ms": telemetry.get("age_ms"),
+            "last_successful_write_monotonic_s": telemetry.get("last_successful_write_monotonic_s"),
+            "successful_ble_write_count": telemetry.get("successful_write_count"),
+            "effective_ble_write_hz": telemetry.get("effective_write_hz"),
+            "last_ble_command": telemetry.get("last_command"),
             "yaw_error_deg": output.yaw_error_deg,
             "pitch_error_deg": output.pitch_error_deg,
             "controller_state": output.state,
@@ -188,6 +199,11 @@ async def run(args):
     intentional_disconnect = False
     disconnected_at = None
     disconnect_state = None
+    connected_at = None
+    first_write_at = None
+    last_write_at = None
+    write_count = 0
+    last_command = None
 
     def record_disconnect(disconnected_client, occurred_at):
         nonlocal bluetooth_state, disconnected_at, disconnect_state
@@ -196,7 +212,16 @@ async def run(args):
         bluetooth_state = "FAULT_DISCONNECTED"
         with contextlib.suppress(Exception):
             diagnostics.event("ble_disconnect", state=disconnect_state,
-                              client_is_connected=client_connected(disconnected_client))
+                              client_is_connected=client_connected(disconnected_client),
+                              connected_elapsed_s=(occurred_at - connected_at
+                                                   if connected_at is not None else None),
+                              last_successful_write_monotonic_s=last_write_at,
+                              last_write_age_s=(occurred_at - last_write_at
+                                                if last_write_at is not None else None),
+                              successful_write_count=write_count,
+                              effective_write_hz=effective_write_hz(
+                                  write_count, first_write_at, occurred_at),
+                              last_command=last_command)
 
     disconnected = make_disconnect_callback(
         lambda: client, lambda: intentional_disconnect, record_disconnect)
@@ -215,6 +240,7 @@ async def run(args):
 
     async def send_axes(tilt, pan):
         nonlocal sequence, bluetooth_state, disconnected_at, disconnect_state
+        nonlocal first_write_at, last_write_at, write_count, last_command
         if disconnected_at is not None or not client_connected(client):
             if disconnected_at is None:
                 disconnected_at = time.monotonic()
@@ -226,6 +252,12 @@ async def run(args):
         try:
             await asyncio.wait_for(
                 client.write_gatt_char(tx_char, ble.packet(sequence, tilt, pan), response=False), 2.0)
+            written_at = time.monotonic()
+            if first_write_at is None:
+                first_write_at = written_at
+            last_write_at = written_at
+            write_count += 1
+            last_command = {"tilt": tilt, "pan": pan, "sequence": sequence}
         except Exception as error:
             if disconnected_at is None:
                 disconnected_at = time.monotonic()
@@ -246,7 +278,7 @@ async def run(args):
             await asyncio.sleep(0.04)
 
     async def connect():
-        nonlocal client, tx_char, home_yaw, home_pitch, bluetooth_state
+        nonlocal client, tx_char, home_yaw, home_pitch, bluetooth_state, connected_at
         bluetooth_state = "CONNECTING"
         client = BleakClient(ble.DEVICE, timeout=20, disconnected_callback=disconnected)
         await asyncio.wait_for(client.connect(), 25)
@@ -259,21 +291,15 @@ async def run(args):
         home_yaw, home_pitch = measured_yaw, measured_pitch
         controller.estimated_yaw_deg = controller.estimated_pitch_deg = 0.0
         bluetooth_state = "CONNECTED"
+        connected_at = time.monotonic()
         await stop_motion()
 
-    try:
-        await connect()
-        next_adsb = 0.0
-        last_tick = time.monotonic()
+    async def poll_aircraft():
+        """Keep network latency out of the proven 20 Hz RS4 write cadence."""
+        nonlocal selected_id
         while True:
-            tick = time.monotonic()
-            now_ms = utc_ms()
-            if disconnected_at is not None or not client_connected(client):
-                bluetooth_state = "FAULT_DISCONNECTED"
-                raise BleLifecycleError("control_loop_precheck", "unexpected disconnect",
-                                        disconnected_at)
-            if tick >= next_adsb:
-                next_adsb = tick + ADS_B_POLL_S
+            requested_at = time.monotonic()
+            try:
                 engine, feed = await asyncio.gather(
                     asyncio.to_thread(ble.fetch_engine), asyncio.to_thread(local.read_local_feed))
                 selection = current_selection(engine)
@@ -285,9 +311,27 @@ async def run(args):
                 if selected_id:
                     aircraft = next((item for item in feed.get("aircraft") or []
                                      if clean_hex(item.get("hex")) == selected_id), None)
-                    observation = observation_from_adsb(aircraft or {}, selected_id, now_ms)
+                    observation = observation_from_adsb(aircraft or {}, selected_id, utc_ms())
                     if observation:
                         source.update(observation)
+            except Exception as error:
+                diagnostics.event("adsb_poll_failure", exception_type=type(error).__name__,
+                                  exception=str(error))
+            await asyncio.sleep(max(0.0, ADS_B_POLL_S - (time.monotonic() - requested_at)))
+
+    try:
+        await connect()
+        poller = asyncio.create_task(poll_aircraft())
+        last_tick = time.monotonic()
+        while True:
+            tick = time.monotonic()
+            now_ms = utc_ms()
+            if disconnected_at is not None or not client_connected(client):
+                bluetooth_state = "FAULT_DISCONNECTED"
+                raise BleLifecycleError("control_loop_precheck", "unexpected disconnect",
+                                        disconnected_at)
+            if poller.done():
+                poller.result()
             target = source.latest(now_ms)
             if telemetry_at is None or tick - telemetry_at > TELEMETRY_MAX_AGE_S:
                 await stop_motion()
@@ -304,10 +348,19 @@ async def run(args):
                 "estimated_pitch": controller.estimated_pitch_deg,
                 "measured_yaw": relative_yaw, "measured_pitch": relative_pitch,
                 "age_ms": round((tick - telemetry_at) * 1000),
+                "last_successful_write_monotonic_s": last_write_at,
+                "successful_write_count": write_count,
+                "effective_write_hz": effective_write_hz(
+                    write_count, first_write_at, last_write_at),
+                "last_command": last_command,
             }, bluetooth_state)
             await asyncio.sleep(max(0.0, CONTROL_PERIOD_S - (time.monotonic() - tick)))
     finally:
         # Cleanup is deliberately best-effort and may never replace the first fault.
+        if 'poller' in locals():
+            poller.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await poller
         with contextlib.suppress(Exception):
             await stop_motion()
         if client is not None:

@@ -8,7 +8,7 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from production_tracker import (BleLifecycleError, client_connected,
+from production_tracker import (BleLifecycleError, client_connected, effective_write_hz,
                                 make_disconnect_callback, prepare_rs4_gatt)  # noqa: E402
 
 
@@ -25,6 +25,11 @@ class FakeTx:
 
 
 class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
+    def test_effective_write_rate_counts_intervals(self):
+        self.assertEqual(effective_write_hz(0, None, None), 0.0)
+        self.assertEqual(effective_write_hz(1, 10.0, 10.0), 0.0)
+        self.assertAlmostEqual(effective_write_hz(21, 10.0, 11.0), 20.0)
+
     def test_lifecycle_error_preserves_stage_cause_and_disconnect_time(self):
         original = RuntimeError("Not connected")
         try:
