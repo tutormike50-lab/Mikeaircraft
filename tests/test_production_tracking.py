@@ -1,6 +1,8 @@
 """Focused offline acceptance tests; no network, Bluetooth, or gimbal access."""
 
+from dataclasses import replace
 from pathlib import Path
+import math
 import sys
 import unittest
 
@@ -40,6 +42,7 @@ class ProductionTrackingTests(unittest.TestCase):
         self.assertLess(max(rates) - min(rates), 0.15)
 
     def test_stale_and_invalid_are_deterministic(self):
+        self.source.select_aircraft("abc123")
         self.assertEqual(self.source.latest(self.t0).status, "INVALID")
         self.source.update(self.observation)
         stale = self.source.latest(self.t0 + 5001)
@@ -50,7 +53,9 @@ class ProductionTrackingTests(unittest.TestCase):
         output = controller.step(stale, 0.05)
         self.assertEqual(output.state, "HOLD")
         self.assertAlmostEqual(output.requested_yaw_rate_deg_s, 2.5)
-        invalid = GeometryTargetSource(self.camera).latest(self.t0)
+        invalid_source = GeometryTargetSource(self.camera)
+        invalid_source.select_aircraft("abc123")
+        invalid = invalid_source.latest(self.t0)
         output = controller.step(invalid, 0.05)
         self.assertEqual((output.state, output.pan_command, output.tilt_command), ("FAULT", 0, 0))
 
@@ -89,6 +94,59 @@ class ProductionTrackingTests(unittest.TestCase):
         self.assertFalse(self.source.update(self.observation))
         after = self.source.latest(self.t0 + 150)
         self.assertGreater(after.target_yaw_relative_deg, before.target_yaw_relative_deg)
+
+    def test_no_current_returns_home_and_new_current_reacquires(self):
+        controller = ControllerV1(max_yaw_accel_dps2=20.0)
+        controller.estimated_yaw_deg = 12.0
+        home = self.source.latest(self.t0)
+        first = controller.step(home, 0.05)
+        self.assertEqual(first.state, "RETURN_HOME")
+        self.assertLess(first.requested_yaw_rate_deg_s, 0.0)
+        self.assertLessEqual(abs(first.requested_yaw_rate_deg_s), 1.0)
+        controller.estimated_yaw_deg = controller.estimated_pitch_deg = 0.0
+        self.assertEqual(controller.step(home, 0.05).state, "HOLD_HOME")
+        self.source.update(self.observation)
+        self.assertEqual(controller.step(self.source.latest(self.t0), 0.05).state, "ACQUIRE")
+
+    def test_latency_is_applied_once_from_observation_timestamp(self):
+        self.source.update(self.observation)
+        target = self.source.latest(self.t0 + 400)
+        self.assertEqual(target.source_age_ms, 400)
+        self.assertEqual(target.prediction_age_ms, 650)
+        self.assertEqual(target.aim_timestamp_ms, self.t0 + 650)
+
+    def test_acquire_rate_is_acceleration_and_braking_bounded(self):
+        self.source.update(self.observation)
+        controller = ControllerV1(max_yaw_accel_dps2=20.0)
+        target = self.source.latest(self.t0)
+        outputs = [controller.step(target, 0.05) for _ in range(5)]
+        rates = [item.requested_yaw_rate_deg_s for item in outputs]
+        self.assertTrue(all(right - left <= 1.000001 for left, right in zip(rates, rates[1:])))
+        self.assertTrue(all(abs(rate) <= math.sqrt(40.0 * abs(item.yaw_error_deg)) + 1e-6
+                            for rate, item in zip(rates, outputs)))
+
+    def test_acquire_settles_to_track_without_shooting_past(self):
+        self.source.update(self.observation)
+        target = replace(self.source.latest(self.t0), target_yaw_relative_deg=12.0,
+                         target_yaw_rate_deg_s=0.0)
+        controller = ControllerV1(capture_cycles=4, max_yaw_accel_dps2=20.0)
+        positions = []
+        states = []
+        for _ in range(300):
+            output = controller.step(target, 0.05)
+            positions.append(controller.estimated_yaw_deg)
+            states.append(output.state)
+        self.assertIn("TRACK", states)
+        self.assertLessEqual(max(positions), 12.35)
+        self.assertAlmostEqual(positions[-1], 12.0, delta=0.35)
+
+    def test_large_position_correction_cannot_reverse_velocity(self):
+        self.source.update(self.observation)
+        later = AircraftObservation("abc123", self.t0 + 1000, 50.045, 14.0001,
+                                    1300.0, 200.0, 90.0, 0.0)
+        self.assertTrue(self.source.update(later))
+        target = self.source.latest(self.t0 + 1000)
+        self.assertGreater(target.target_yaw_rate_deg_s, 0.0)
 
 
 if __name__ == "__main__":

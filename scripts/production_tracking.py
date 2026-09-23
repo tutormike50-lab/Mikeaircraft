@@ -119,12 +119,13 @@ class _State:
 class AircraftStateEstimator:
     """Timestamp-aware constant-velocity filter in the camera ENU frame."""
 
-    def __init__(self, camera, position_gain=0.45, velocity_gain=0.30,
-                 innovation_limit_m=2500.0):
+    def __init__(self, camera, position_gain=0.20, velocity_gain=0.20,
+                 innovation_limit_m=2500.0, max_velocity_correction_m_s=35.0):
         self.camera = camera
         self.position_gain = position_gain
         self.velocity_gain = velocity_gain
         self.innovation_limit_m = innovation_limit_m
+        self.max_velocity_correction_m_s = max_velocity_correction_m_s
         self.state = None
         self.latest_position_timestamp_ms = None
         self.correction_event = False
@@ -213,9 +214,21 @@ class AircraftStateEstimator:
         corrected_e = prior.east_m + self.position_gain * innovation_e
         corrected_n = prior.north_m + self.position_gain * innovation_n
         corrected_u = None if up is None else (up if prior.up_m is None else prior.up_m + self.position_gain * innovation_u)
-        inferred = (prior.velocity_east_m_s + self.velocity_gain * innovation_e / dt,
-                    prior.velocity_north_m_s + self.velocity_gain * innovation_n / dt,
-                    prior.velocity_up_m_s + self.velocity_gain * innovation_u / dt)
+        # ADS-B position fixes are quantised and can arrive in batches. Feeding a
+        # large innovation/dt straight into velocity made each new report look
+        # like a motor pulse (and could briefly reverse the requested rate).
+        velocity_correction_e = clamp(self.velocity_gain * innovation_e / dt,
+                                      -self.max_velocity_correction_m_s,
+                                      self.max_velocity_correction_m_s)
+        velocity_correction_n = clamp(self.velocity_gain * innovation_n / dt,
+                                      -self.max_velocity_correction_m_s,
+                                      self.max_velocity_correction_m_s)
+        velocity_correction_u = clamp(self.velocity_gain * innovation_u / dt,
+                                      -self.max_velocity_correction_m_s,
+                                      self.max_velocity_correction_m_s)
+        inferred = (prior.velocity_east_m_s + velocity_correction_e,
+                    prior.velocity_north_m_s + velocity_correction_n,
+                    prior.velocity_up_m_s + velocity_correction_u)
         if measured_velocity:
             inferred = tuple((1.0 - self.velocity_gain) * a + self.velocity_gain * b
                              for a, b in zip(inferred, measured_velocity))
@@ -248,13 +261,27 @@ class GeometryTargetSource:
         self.valid_age_ms = int(valid_age_s * 1000)
         self.stale_age_ms = int(stale_age_s * 1000)
         self.estimator = AircraftStateEstimator(camera)
+        self.active_aircraft_id = None
+
+    def select_aircraft(self, aircraft_id):
+        if aircraft_id != self.active_aircraft_id:
+            self.estimator.clear()
+            self.active_aircraft_id = aircraft_id
 
     def update(self, observation):
+        if observation.aircraft_id != self.active_aircraft_id:
+            self.select_aircraft(observation.aircraft_id)
         return self.estimator.update(observation)
 
     def latest(self, now_ms):
         aim_ms = now_ms + round(self.effective_latency_s * 1000)
         state = self.estimator.state
+        if self.active_aircraft_id is None:
+            return GeometryTarget(now_ms, None, self.camera.home_true_azimuth_deg,
+                                  self.camera.home_elevation_deg, 0.0, 0.0, 0.0, 0.0,
+                                  None, aim_ms, None, None, None, None,
+                                  "CAMERA_REFERENCE", "CAMERA_REFERENCE", None,
+                                  True, True, "HOME")
         if state is None:
             return GeometryTarget(now_ms, None, None, None, None, None, 0.0, 0.0,
                                   None, aim_ms, None, None, None, None, None, None,
@@ -323,14 +350,17 @@ class ControllerV1:
     RS4_PITCH_SIGN = 1
     YAW_DEG_S_PER_COMMAND = 0.063
 
-    def __init__(self, pitch_actuator=None, acquire_kp=1.2, track_kp=0.45,
-                 max_yaw_command=300, capture_cycles=4, stale_ramp_dps2=12.0):
+    def __init__(self, pitch_actuator=None, acquire_kp=1.0, track_kp=0.45,
+                 max_yaw_command=300, capture_cycles=4, stale_ramp_dps2=12.0,
+                 max_yaw_accel_dps2=24.0, home_kp=0.65):
         self.pitch_actuator = pitch_actuator or LegacyPitchActuator()
         self.acquire_kp = acquire_kp
         self.track_kp = track_kp
         self.max_yaw_command = max_yaw_command
         self.capture_cycles = capture_cycles
         self.stale_ramp_dps2 = stale_ramp_dps2
+        self.max_yaw_accel_dps2 = max_yaw_accel_dps2
+        self.home_kp = home_kp
         self.aircraft_id = None
         self.mode = "WAITING"
         self.estimated_yaw_deg = 0.0
@@ -351,6 +381,27 @@ class ControllerV1:
 
     def step(self, target, dt_s):
         dt_s = clamp(dt_s, 0.001, 0.25)
+        if target.status == "HOME":
+            self.aircraft_id = None
+            yaw_error = wrap180(-self.estimated_yaw_deg)
+            pitch_error = -self.estimated_pitch_deg
+            desired_rate = clamp(self.home_kp * yaw_error,
+                                 -self.max_yaw_command * self.YAW_DEG_S_PER_COMMAND,
+                                 self.max_yaw_command * self.YAW_DEG_S_PER_COMMAND)
+            yaw_rate = self._slew_yaw_rate(desired_rate, dt_s)
+            pan = int(clamp(round(yaw_rate / self.YAW_DEG_S_PER_COMMAND),
+                            -self.max_yaw_command, self.max_yaw_command))
+            tilt = self.pitch_actuator.command(pitch_error)
+            self.mode = "HOLD_HOME" if abs(yaw_error) <= 0.35 and abs(pitch_error) <= 0.35 else "RETURN_HOME"
+            if self.mode == "HOLD_HOME":
+                yaw_rate = 0.0
+                pan = 0
+                tilt = 0
+                self.last_yaw_rate = 0.0
+            self.estimated_yaw_deg = wrap180(self.estimated_yaw_deg + yaw_rate * dt_s)
+            return ControllerOutput(self.mode, yaw_error, pitch_error, yaw_rate, 0.0,
+                                    pan * self.RS4_YAW_SIGN,
+                                    tilt * self.RS4_PITCH_SIGN)
         if target.aircraft_id and target.aircraft_id != self.aircraft_id:
             self.reset_target(target.aircraft_id)
         if target.status == "INVALID" or not target.horizontal_valid:
@@ -381,6 +432,10 @@ class ControllerV1:
         yaw_rate = clamp(target.target_yaw_rate_deg_s + kp * yaw_error,
                          -self.max_yaw_command * self.YAW_DEG_S_PER_COMMAND,
                          self.max_yaw_command * self.YAW_DEG_S_PER_COMMAND)
+        if self.mode == "ACQUIRE":
+            braking_rate = math.sqrt(2.0 * self.max_yaw_accel_dps2 * abs(yaw_error))
+            yaw_rate = clamp(yaw_rate, -braking_rate, braking_rate)
+        yaw_rate = self._slew_yaw_rate(yaw_rate, dt_s)
         pan = int(clamp(round(yaw_rate / self.YAW_DEG_S_PER_COMMAND) * self.RS4_YAW_SIGN,
                         -self.max_yaw_command, self.max_yaw_command))
         tilt = 0 if pitch_error is None else self.pitch_actuator.command(pitch_error) * self.RS4_PITCH_SIGN
@@ -388,3 +443,7 @@ class ControllerV1:
         self.estimated_yaw_deg = wrap180(self.estimated_yaw_deg + yaw_rate * dt_s)
         requested_pitch = target.target_pitch_rate_deg_s if pitch_error is not None else 0.0
         return ControllerOutput(self.mode, yaw_error, pitch_error, yaw_rate, requested_pitch, pan, tilt)
+
+    def _slew_yaw_rate(self, desired_rate, dt_s):
+        change = self.max_yaw_accel_dps2 * dt_s
+        return clamp(desired_rate, self.last_yaw_rate - change, self.last_yaw_rate + change)

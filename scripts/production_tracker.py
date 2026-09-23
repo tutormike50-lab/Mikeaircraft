@@ -197,6 +197,14 @@ def observation_from_adsb(aircraft, aircraft_id, received_ms):
                                altitude_source=altitude_source)
 
 
+def configured_effective_latency_s(value=None):
+    raw = value if value is not None else os.environ.get("MIKEAIRCRAFT_EFFECTIVE_LATENCY_S", "0.25")
+    latency = float(raw)
+    if not math.isfinite(latency) or latency < 0.0 or latency > 2.0:
+        raise ValueError("effective latency must be between 0.0 and 2.0 seconds")
+    return latency
+
+
 class Diagnostics:
     def __init__(self, path):
         self.handle = Path(path).open("a", encoding="utf-8", buffering=1)
@@ -385,7 +393,7 @@ async def run(args):
                 new_id = selection and selection["aircraft_id"]
                 if new_id != selected_id:
                     selected_id = new_id
-                    source.estimator.clear()
+                    source.select_aircraft(new_id)
                     controller.reset_target(new_id) if new_id else None
                 if selected_id:
                     aircraft = next((item for item in feed.get("aircraft") or []
@@ -479,7 +487,9 @@ def main(argv=None):
     parser.add_argument("--check", action="store_true", help="validate configuration without network or hardware")
     parser.add_argument("--track", action="store_true", help="enable the production hardware loop")
     parser.add_argument("--camera-reference-url", default=CAMERA_REFERENCE_URL)
-    parser.add_argument("--effective-latency", type=float, default=0.25)
+    parser.add_argument("--effective-latency", type=configured_effective_latency_s,
+                        default=configured_effective_latency_s(),
+                        help="downstream aim latency in seconds (persistent env: MIKEAIRCRAFT_EFFECTIVE_LATENCY_S)")
     parser.add_argument("--log", default=f"production-tracker-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.jsonl")
     parser.add_argument("--pin", default=os.environ.get("MIKEAIRCRAFT_CONTROL_PIN", ""))
     args = parser.parse_args(argv)

@@ -9,8 +9,9 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from production_tracker import (BleLifecycleError, DjiFrameDecoder, client_connected,
-                                effective_write_hz, make_disconnect_callback,
-                                prepare_rs4_gatt, rs4_protocol_response)  # noqa: E402
+                                configured_effective_latency_s, effective_write_hz, make_disconnect_callback,
+                                observation_from_adsb, prepare_rs4_gatt,
+                                rs4_protocol_response)  # noqa: E402
 
 
 class FakeTx:
@@ -26,6 +27,24 @@ class FakeTx:
 
 
 class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
+    def test_effective_latency_configuration_is_bounded(self):
+        self.assertEqual(configured_effective_latency_s("0.50"), 0.5)
+        with self.assertRaises(ValueError):
+            configured_effective_latency_s("-0.1")
+
+    def test_only_geometric_altitude_enables_vertical_tracking(self):
+        geometric = observation_from_adsb(
+            {"lat": 50.0, "lon": 14.0, "alt_geom": 4000, "alt_baro": 3900},
+            "abc123", 2_000_000)
+        self.assertEqual(geometric.altitude_source, "ADS_B_GEOMETRIC")
+        self.assertAlmostEqual(geometric.altitude_ellipsoid_m, 1219.2)
+        barometric = observation_from_adsb(
+            {"lat": 50.0, "lon": 14.0, "alt_baro": 3900},
+            "abc123", 2_000_000)
+        self.assertEqual(barometric.altitude_source,
+                         "UNAVAILABLE_BAROMETRIC_NOT_SUBSTITUTED")
+        self.assertIsNone(barometric.altitude_ellipsoid_m)
+
     def test_captured_rs4_requests_produce_exact_official_app_responses(self):
         captures = [
             ("551204c70402a8ee0004380000646400bc01",
