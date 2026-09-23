@@ -8,7 +8,8 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from production_tracker import prepare_rs4_gatt  # noqa: E402
+from production_tracker import (BleLifecycleError, client_connected,
+                                make_disconnect_callback, prepare_rs4_gatt)  # noqa: E402
 
 
 class FakeTx:
@@ -24,6 +25,44 @@ class FakeTx:
 
 
 class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
+    def test_lifecycle_error_preserves_stage_cause_and_disconnect_time(self):
+        original = RuntimeError("Not connected")
+        try:
+            try:
+                raise original
+            except RuntimeError as error:
+                raise BleLifecycleError("command_write", str(error), 12.5) from error
+        except BleLifecycleError as fault:
+            self.assertEqual(fault.stage, "command_write")
+            self.assertIs(fault.__cause__, original)
+            self.assertIn("disconnect_monotonic_s=12.500000", str(fault))
+
+    def test_connection_probe_is_safe_during_cleanup(self):
+        class BrokenClient:
+            @property
+            def is_connected(self):
+                raise RuntimeError("backend already gone")
+
+        self.assertFalse(client_connected(BrokenClient()))
+
+    def test_post_connect_disconnect_records_only_active_unexpected_client(self):
+        active = object()
+        stale = object()
+        intentional = False
+        recorded = []
+        callback = make_disconnect_callback(
+            lambda: active, lambda: intentional,
+            lambda client, occurred_at: recorded.append((client, occurred_at)))
+
+        callback(stale)
+        self.assertEqual(recorded, [])
+        callback(active)
+        self.assertIs(recorded[0][0], active)
+        self.assertIsInstance(recorded[0][1], float)
+        intentional = True
+        callback(active)
+        self.assertEqual(len(recorded), 1)
+
     async def test_proven_gatt_lifecycle_waits_notifies_then_resolves_ready_tx(self):
         events = []
         tx = FakeTx(events)

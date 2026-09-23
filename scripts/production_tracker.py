@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import struct
 import time
+import traceback
 import urllib.request
 
 from production_tracking import AircraftObservation, CameraReference, ControllerV1, GeometryTargetSource, wrap180
@@ -28,6 +29,35 @@ ADS_B_POLL_S = 0.20
 TELEMETRY_MAX_AGE_S = 2.0
 RS4_YAW_SIGN = 1
 RS4_PITCH_SIGN = 1
+
+
+class BleLifecycleError(RuntimeError):
+    """A BLE failure annotated with the operation that first observed it."""
+
+    def __init__(self, stage, detail, disconnected_at=None):
+        self.stage = stage
+        self.disconnected_at = disconnected_at
+        suffix = (f"; disconnect_monotonic_s={disconnected_at:.6f}"
+                  if disconnected_at is not None else "")
+        super().__init__(f"BLE stage={stage}: {detail}{suffix}")
+
+
+def client_connected(client):
+    """Read Bleak connection state without allowing cleanup checks to mask a fault."""
+    if client is None:
+        return False
+    try:
+        return bool(client.is_connected)
+    except Exception:
+        return False
+
+
+def make_disconnect_callback(get_client, is_intentional, on_disconnect):
+    """Build a callback that only faults the active, unexpectedly lost client."""
+    def callback(disconnected_client):
+        if disconnected_client is get_client() and not is_intentional():
+            on_disconnect(disconnected_client, time.monotonic())
+    return callback
 
 
 async def prepare_rs4_gatt(client, ble, receive, sleep=asyncio.sleep):
@@ -132,6 +162,10 @@ class Diagnostics:
     def close(self):
         self.handle.close()
 
+    def event(self, event, **fields):
+        row = {"event": event, "monotonic_s": time.monotonic(), **fields}
+        self.handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+
 
 async def run(args):
     # Imported only after explicit movement confirmation, so --check cannot touch BLE.
@@ -151,6 +185,21 @@ async def run(args):
     selected_id = None
     bluetooth_state = "DISCONNECTED"
     diagnostics = Diagnostics(args.log)
+    intentional_disconnect = False
+    disconnected_at = None
+    disconnect_state = None
+
+    def record_disconnect(disconnected_client, occurred_at):
+        nonlocal bluetooth_state, disconnected_at, disconnect_state
+        disconnected_at = occurred_at
+        disconnect_state = "unexpected"
+        bluetooth_state = "FAULT_DISCONNECTED"
+        with contextlib.suppress(Exception):
+            diagnostics.event("ble_disconnect", state=disconnect_state,
+                              client_is_connected=client_connected(disconnected_client))
+
+    disconnected = make_disconnect_callback(
+        lambda: client, lambda: intentional_disconnect, record_disconnect)
 
     def receive(_, data):
         nonlocal measured_yaw, measured_pitch, telemetry_at
@@ -165,12 +214,31 @@ async def run(args):
         telemetry_at = time.monotonic()
 
     async def send_axes(tilt, pan):
-        nonlocal sequence
+        nonlocal sequence, bluetooth_state, disconnected_at, disconnect_state
+        if disconnected_at is not None or not client_connected(client):
+            if disconnected_at is None:
+                disconnected_at = time.monotonic()
+                disconnect_state = "observed_before_write"
+                bluetooth_state = "FAULT_DISCONNECTED"
+                diagnostics.event("ble_disconnect_observed", state=disconnect_state)
+            raise BleLifecycleError("command_write_precheck", "client is not connected", disconnected_at)
         sequence = (sequence + 1) & 0xFFFF
-        await client.write_gatt_char(tx_char, ble.packet(sequence, tilt, pan), response=False)
+        try:
+            await asyncio.wait_for(
+                client.write_gatt_char(tx_char, ble.packet(sequence, tilt, pan), response=False), 2.0)
+        except Exception as error:
+            if disconnected_at is None:
+                disconnected_at = time.monotonic()
+                disconnect_state = "write_failed"
+                bluetooth_state = "FAULT_WRITE"
+                diagnostics.event("ble_write_failure", state=disconnect_state,
+                                  exception_type=type(error).__name__, exception=str(error))
+            raise BleLifecycleError("command_write", f"{type(error).__name__}: {error}",
+                                    disconnected_at) from error
 
     async def stop_motion():
-        if client is None or not client.is_connected or tx_char is None:
+        # Once a disconnect/write failure is observed, do not touch the dead client.
+        if disconnected_at is not None or not client_connected(client) or tx_char is None:
             return
         for _ in range(5):
             with contextlib.suppress(Exception):
@@ -180,7 +248,7 @@ async def run(args):
     async def connect():
         nonlocal client, tx_char, home_yaw, home_pitch, bluetooth_state
         bluetooth_state = "CONNECTING"
-        client = BleakClient(ble.DEVICE, timeout=20)
+        client = BleakClient(ble.DEVICE, timeout=20, disconnected_callback=disconnected)
         await asyncio.wait_for(client.connect(), 25)
         tx_char = await prepare_rs4_gatt(client, ble, receive)
         deadline = time.monotonic() + 5
@@ -200,10 +268,10 @@ async def run(args):
         while True:
             tick = time.monotonic()
             now_ms = utc_ms()
-            if client is None or not client.is_connected:
-                bluetooth_state = "RECONNECTING"
-                await stop_motion()
-                raise RuntimeError("Bluetooth disconnected; STOP required before a new run")
+            if disconnected_at is not None or not client_connected(client):
+                bluetooth_state = "FAULT_DISCONNECTED"
+                raise BleLifecycleError("control_loop_precheck", "unexpected disconnect",
+                                        disconnected_at)
             if tick >= next_adsb:
                 next_adsb = tick + ADS_B_POLL_S
                 engine, feed = await asyncio.gather(
@@ -239,11 +307,16 @@ async def run(args):
             }, bluetooth_state)
             await asyncio.sleep(max(0.0, CONTROL_PERIOD_S - (time.monotonic() - tick)))
     finally:
-        await stop_motion()
+        # Cleanup is deliberately best-effort and may never replace the first fault.
+        with contextlib.suppress(Exception):
+            await stop_motion()
         if client is not None:
+            intentional_disconnect = True
             with contextlib.suppress(Exception):
-                await client.disconnect()
-        diagnostics.close()
+                if client_connected(client):
+                    await asyncio.wait_for(client.disconnect(), 4)
+        with contextlib.suppress(Exception):
+            diagnostics.close()
 
 
 def main(argv=None):
@@ -273,6 +346,7 @@ def main(argv=None):
         return 130
     except Exception as error:
         print(f"PRODUCTION TRACKER FAULT: {type(error).__name__}: {error}")
+        traceback.print_exception(type(error), error, error.__traceback__)
         return 1
 
 
