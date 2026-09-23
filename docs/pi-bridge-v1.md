@@ -15,25 +15,21 @@ only in the Pi environment file. Existing Redis variables and
 
 ## One-time Pi installation
 
-Run these after Mission Control has pushed and deployed this commit. These steps
-intentionally do not run automatically from development:
+After Mission Control has configured the new bridge token in Vercel, run this
+single command from the checked-out MikeAircraft repository on the Pi:
 
 ```sh
-sudo useradd --system --home /opt/mikeaircraft --shell /usr/sbin/nologin mikeaircraft 2>/dev/null || true
-sudo mkdir -p /opt/mikeaircraft /etc/mikeaircraft /opt/mikeaircraft/var/log
-sudo cp -a /path/to/checked-out/MikeAircraft/. /opt/mikeaircraft/
-sudo chown -R mikeaircraft:mikeaircraft /opt/mikeaircraft
-sudo install -m 0644 /opt/mikeaircraft/deploy/pi-bridge/mikeaircraft-pi-bridge.service /etc/systemd/system/mikeaircraft-pi-bridge.service
-sudo install -m 0600 /opt/mikeaircraft/deploy/pi-bridge/pi-bridge.env.example /etc/mikeaircraft/pi-bridge.env
-sudoedit /etc/mikeaircraft/pi-bridge.env
-sudo systemctl daemon-reload
-sudo systemctl enable --now mikeaircraft-pi-bridge.service
-sudo systemctl status --no-pager mikeaircraft-pi-bridge.service
+sudo bash deploy/pi-bridge/install.sh
 ```
 
-Replace `/path/to/checked-out/MikeAircraft` and both placeholder secrets before
-enabling. The Pi needs Python 3 plus the production tracker's existing runtime
-dependencies (including Bleak). Logs remain in `/opt/mikeaircraft/var/log`.
+The installer asks once for the new bridge token and existing Control PIN, then
+installs and starts the service. It does not print either secret after entry. It
+preserves real existing credentials unless replacement is confirmed. To rotate
+credentials later without reinstalling the checkout, run
+`sudo bash deploy/pi-bridge/install.sh --credentials-only` (or add `--force` to
+skip the replacement confirmation). The Pi needs Python 3 plus the production
+tracker's existing runtime dependencies (including Bleak). Logs remain in
+`/opt/mikeaircraft/var/log`.
 
 STOP sends SIGINT to let the production tracker's existing neutral/disconnect
 cleanup run, waits 12 seconds, then escalates only if the process is stuck. A
