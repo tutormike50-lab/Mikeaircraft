@@ -178,6 +178,17 @@ module.exports = async function handler(req, res) {
     .location-button:focus-visible{outline:3px solid rgba(92,229,154,.42);outline-offset:3px}
     .location-button:disabled{cursor:wait;opacity:.62}
     .location-note{margin:12px 0 0;color:#7893a6;font-size:12px;line-height:1.5}
+    .calibration-target{display:none;margin:0 0 18px;padding:18px;border:1px solid #39779c;border-radius:14px;background:#061725;text-align:center}
+    .calibration-target.active{display:block}
+    .crosshair{position:relative;width:min(58vw,230px);height:min(58vw,230px);margin:0 auto 16px;border:2px solid var(--blue);border-radius:50%;background:radial-gradient(circle,transparent 0 11px,var(--green) 12px 15px,transparent 16px)}
+    .crosshair::before,.crosshair::after{content:'';position:absolute;background:var(--green);box-shadow:0 0 10px rgba(92,229,154,.55)}
+    .crosshair::before{width:2px;height:100%;left:calc(50% - 1px);top:0}.crosshair::after{height:2px;width:100%;top:calc(50% - 1px);left:0}
+    .calibration-state{font-size:22px;font-weight:900;color:var(--amber);letter-spacing:.5px}
+    .calibration-instruction{margin:8px auto;color:#d7e8f2;line-height:1.45;max-width:560px}
+    .calibration-progress{height:8px;margin:14px 0 10px;overflow:hidden;border-radius:8px;background:#163247}
+    .calibration-progress span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--blue),var(--green));transition:width .3s}
+    .calibration-counts{color:var(--blue-soft);font-weight:800}
+    .engineering{margin-top:14px;text-align:left;color:#9db3c3;font-size:12px;line-height:1.55}.engineering summary{cursor:pointer;color:#bcd5e4;font-weight:800}.engineering pre{white-space:pre-wrap;font:inherit}
     .footnote{margin:18px 4px 0;color:#6f8799;font-size:12px;line-height:1.5}
     .framing-card{margin-top:22px}
     .framing-layout{display:grid;grid-template-columns:260px 1fr;gap:28px;align-items:center}
@@ -281,7 +292,15 @@ module.exports = async function handler(req, res) {
           <span class="location-label">CAMERA POSITION</span>
           <span id="cameraLocationStatus" class="location-value warn">CHECKING</span>
         </div>
-        <button id="resetLocationButton" class="location-button" type="button">RESET CAMERA LOCATION</button>
+        <div id="calibrationTarget" class="calibration-target" aria-hidden="true">
+          <div class="crosshair" aria-hidden="true"></div>
+          <div id="calibrationState" class="calibration-state">ACQUIRING</div>
+          <p class="calibration-instruction">Hold this crosshair against the defined camera lens reference point and keep the phone stationary.</p>
+          <div class="calibration-progress"><span id="calibrationProgress"></span></div>
+          <div id="calibrationCounts" class="calibration-counts">0 fresh fixes · 0 seconds</div>
+          <details class="engineering"><summary>Engineering details</summary><pre id="calibrationEngineering">Waiting for fresh fixes.</pre></details>
+        </div>
+        <button id="resetLocationButton" class="location-button" type="button">AUTO CALIBRATE CAMERA POSITION</button>
         <div id="locationMessage" role="status" aria-live="polite">The exact coordinates are stored privately and are not shown on the public overlay.</div>
         <p class="location-note">For the best result, allow precise location and keep the device beside the camera while the position is captured.</p>
       </div>
@@ -322,6 +341,7 @@ module.exports = async function handler(req, res) {
     <p class="footnote">The YoloBox remains display-only. Airport and camera settings are controlled here.</p>
   </main>
 
+  <script src="/camera-position.js"></script>
   <script>
     const pinInput = document.getElementById("pin");
     const lockStatus = document.getElementById("lockStatus");
@@ -336,6 +356,11 @@ module.exports = async function handler(req, res) {
     const cameraLocationStatus = document.getElementById("cameraLocationStatus");
     const resetLocationButton = document.getElementById("resetLocationButton");
     const locationMessage = document.getElementById("locationMessage");
+    const calibrationTarget = document.getElementById("calibrationTarget");
+    const calibrationState = document.getElementById("calibrationState");
+    const calibrationProgress = document.getElementById("calibrationProgress");
+    const calibrationCounts = document.getElementById("calibrationCounts");
+    const calibrationEngineering = document.getElementById("calibrationEngineering");
 
     let selectedAirport = null;
     let airports = [];
@@ -344,6 +369,9 @@ module.exports = async function handler(req, res) {
     let priorityBusy = false;
     let priorityMode = "AUTO";
     let priorityUntil = null;
+    let locationWatchId = null;
+    let locationTimer = null;
+    let calibrationSession = null;
 
     const pinStorageKey = "mikeaircraft-control-pin";
     pinInput.value = sessionStorage.getItem(pinStorageKey) || "";
@@ -595,8 +623,33 @@ module.exports = async function handler(req, res) {
       return "The camera location could not be captured.";
     }
 
-    async function saveCameraLocation(position) {
+    function stopLocationWatch() {
+      if (locationWatchId !== null) navigator.geolocation.clearWatch(locationWatchId);
+      if (locationTimer !== null) clearInterval(locationTimer);
+      locationWatchId = null;
+      locationTimer = null;
+    }
+
+    function renderCalibration(snapshot) {
+      const estimate = snapshot.estimate;
+      calibrationState.textContent = snapshot.state;
+      calibrationState.className = "calibration-state " + (snapshot.state === "GOOD" ? "good" : snapshot.state.indexOf("POOR") === 0 ? "bad" : "warn");
+      calibrationProgress.style.width = Math.min(100, snapshot.elapsedSeconds / 90 * 100) + "%";
+      calibrationCounts.textContent = snapshot.totalCount + " fresh fixes · " + Math.floor(snapshot.elapsedSeconds) + " seconds";
+      calibrationEngineering.textContent = estimate
+        ? "Accepted: " + estimate.acceptedCount + " / " + snapshot.totalCount +
+          "\\nDuplicate timestamps: " + snapshot.duplicateCount + " · stale: " + snapshot.staleCount +
+          "\\nPhone reported accuracy: ±" + estimate.reportedAccuracyM.toFixed(1) + " m" +
+          "\\nObserved RMS spread: " + estimate.observedSpreadM.toFixed(1) + " m" +
+          "\\n95% cluster radius: " + estimate.clusterRadius95M.toFixed(1) + " m" +
+          "\\nLast-30-second centre movement: " + (estimate.centreMovement30sM === null ? "calculating" : estimate.centreMovement30sM.toFixed(1) + " m") +
+          "\\nConservative uncertainty: ±" + estimate.horizontalUncertaintyM.toFixed(1) + " m · " + estimate.grade
+        : "Waiting for enough fresh fixes to estimate the position cluster.";
+    }
+
+    async function saveCameraLocation(snapshot) {
       const pin = pinInput.value.trim();
+      const estimate = snapshot.estimate;
 
       try {
         const response = await fetch("/api/settings", {
@@ -608,10 +661,24 @@ module.exports = async function handler(req, res) {
           },
           body: JSON.stringify({
             cameraLocation: {
-              lat: position.coords.latitude,
-              lon: position.coords.longitude,
-              accuracyM: position.coords.accuracy,
-              altitudeM: Number.isFinite(position.coords.altitude) ? position.coords.altitude : null
+              lat: estimate.lat,
+              lon: estimate.lon,
+              horizontalUncertaintyM: estimate.horizontalUncertaintyM,
+              phoneReportedAccuracyM: estimate.reportedAccuracyM,
+              observedSpreadM: estimate.observedSpreadM,
+              clusterRadius95M: estimate.clusterRadius95M,
+              centreMovement30sM: estimate.centreMovement30sM,
+              altitudeM: estimate.altitudeM,
+              altitudeAccuracyM: estimate.altitudeAccuracyM,
+              sampleCountTotal: snapshot.totalCount,
+              sampleCountAccepted: estimate.acceptedCount,
+              sampleCountRejected: estimate.rejectedCount,
+              duplicateTimestampCount: snapshot.duplicateCount,
+              staleTimestampCount: snapshot.staleCount,
+              calibrationStartedAt: snapshot.startedAt,
+              calibrationCompletedAt: new Date().toISOString(),
+              calibrationReferencePoint: "PHONE_CROSSHAIR_AT_CAMERA_LENS_REFERENCE",
+              grade: estimate.grade
             }
           })
         });
@@ -625,18 +692,13 @@ module.exports = async function handler(req, res) {
 
         const accuracy = Number(data.cameraLocation?.accuracyM);
         const accuracyText = Number.isFinite(accuracy) ? " ±" + Math.round(accuracy) + "m" : "";
-        cameraLocationStatus.textContent = "SAVED" + accuracyText;
-        cameraLocationStatus.className = "location-value good";
+        cameraLocationStatus.textContent = "POSITION CALIBRATED" + accuracyText;
+        cameraLocationStatus.className = "location-value " + (estimate.grade === "AMBER" ? "warn" : "good");
         cameraLocationStatus.title = data.cameraLocation?.updatedAt
           ? "Saved " + new Date(data.cameraLocation.updatedAt).toLocaleString()
           : "Camera position saved";
 
-        if (Number.isFinite(accuracy) && accuracy > 25) {
-          setLocationMessage("Saved, but accuracy is" + accuracyText + ". A phone beside the camera with precise location enabled will improve tracking.", "warn");
-        }
-        else {
-          setLocationMessage("Camera position saved" + accuracyText + ".", "good");
-        }
+        setLocationMessage("POSITION CALIBRATED" + accuracyText + " · " + estimate.grade + ".", estimate.grade === "AMBER" ? "warn" : "good");
         rememberPin(pin);
       }
       catch (error) {
@@ -647,8 +709,41 @@ module.exports = async function handler(req, res) {
       finally {
         locationBusy = false;
         resetLocationButton.disabled = false;
-        resetLocationButton.textContent = "RESET CAMERA LOCATION";
+        resetLocationButton.textContent = "AUTO CALIBRATE CAMERA POSITION";
       }
+    }
+
+    function completeCalibration(force) {
+      if (!locationBusy || !calibrationSession) return;
+      const snapshot = calibrationSession.snapshot();
+      renderCalibration(snapshot);
+      if (!snapshot.minimumMet || !snapshot.estimate) {
+        if (!force) return;
+        stopLocationWatch();
+        locationBusy = false;
+        resetLocationButton.disabled = false;
+        resetLocationButton.textContent = "TRY AUTO CALIBRATE AGAIN";
+        cameraLocationStatus.textContent = "CALIBRATION CONFLICT";
+        cameraLocationStatus.className = "location-value bad";
+        setLocationMessage("CALIBRATION CONFLICT — fewer than 20 fresh fixes were received in 180 seconds, so the previous saved position was preserved.", "bad");
+        return;
+      }
+      if (snapshot.estimate.grade === "REJECT") {
+        if (!force) return;
+        stopLocationWatch();
+        locationBusy = false;
+        resetLocationButton.disabled = false;
+        resetLocationButton.textContent = "TRY AUTO CALIBRATE AGAIN";
+        cameraLocationStatus.textContent = "CALIBRATION CONFLICT";
+        cameraLocationStatus.className = "location-value bad";
+        setLocationMessage("CALIBRATION CONFLICT — uncertainty remained above 20 m, so the previous saved position was preserved.", "bad");
+        return;
+      }
+      if (!force && !(snapshot.preferredMet && snapshot.stable)) return;
+      stopLocationWatch();
+      calibrationState.textContent = "POSITION CALIBRATED";
+      calibrationState.className = "calibration-state good";
+      saveCameraLocation(snapshot);
     }
 
     function resetCameraLocation() {
@@ -669,27 +764,44 @@ module.exports = async function handler(req, res) {
 
       locationBusy = true;
       resetLocationButton.disabled = true;
-      resetLocationButton.textContent = "FINDING CAMERA POSITION…";
-      cameraLocationStatus.textContent = "LOCATING";
+      resetLocationButton.textContent = "CALIBRATING — KEEP PHONE STILL";
+      cameraLocationStatus.textContent = "ACQUIRING";
       cameraLocationStatus.className = "location-value warn";
-      setLocationMessage("Keep this device beside the camera while its precise position is captured…", "warn");
+      calibrationTarget.classList.add("active");
+      calibrationTarget.setAttribute("aria-hidden", "false");
+      calibrationSession = CameraPositionCalibration.createSession(Date.now());
+      setLocationMessage("Keep the crosshair against the camera reference point. Collection takes at least 60 seconds and normally 90 seconds.", "warn");
 
-      navigator.geolocation.getCurrentPosition(
-        saveCameraLocation,
+      locationWatchId = navigator.geolocation.watchPosition(
+        (position) => {
+          calibrationSession.add(position, Date.now());
+          const snapshot = calibrationSession.snapshot();
+          renderCalibration(snapshot);
+          cameraLocationStatus.textContent = snapshot.state;
+          if (snapshot.preferredMet && snapshot.stable && snapshot.estimate && snapshot.estimate.grade !== "REJECT") completeCalibration(false);
+        },
         (error) => {
+          stopLocationWatch();
           locationBusy = false;
           resetLocationButton.disabled = false;
-          resetLocationButton.textContent = "RESET CAMERA LOCATION";
+          resetLocationButton.textContent = "TRY AUTO CALIBRATE AGAIN";
           cameraLocationStatus.textContent = "NOT SAVED";
           cameraLocationStatus.className = "location-value bad";
           setLocationMessage(locationErrorMessage(error), "bad");
         },
         {
           enableHighAccuracy: true,
-          timeout: 20000,
+          timeout: 30000,
           maximumAge: 0
         }
       );
+      locationTimer = setInterval(() => {
+        const snapshot = calibrationSession.snapshot();
+        renderCalibration(snapshot);
+        cameraLocationStatus.textContent = snapshot.state;
+        if (snapshot.elapsedSeconds >= 180) completeCalibration(true);
+        else if (snapshot.preferredMet && snapshot.stable && snapshot.estimate && snapshot.estimate.grade !== "REJECT") completeCalibration(false);
+      }, 1000);
     }
 
     resetLocationButton.addEventListener("click", resetCameraLocation);

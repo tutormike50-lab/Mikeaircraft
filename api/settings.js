@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 
-const VERSION = "0.3";
+const VERSION = "0.4";
 const SETTINGS_KEY = "mikeaircraft:control:settings";
 const PRIORITY_DURATION_MS = 2 * 60 * 1000;
 const PRIORITY_MODES = new Set(["AUTO", "ARRIVAL", "TAKEOFF", "RUNWAY"]);
@@ -34,7 +34,7 @@ function normaliseCameraLocation(value) {
 
   const lat = Number(value.lat);
   const lon = Number(value.lon);
-  const accuracyM = Number(value.accuracyM);
+  const accuracyM = Number(value.horizontalUncertaintyM ?? value.accuracyM);
   const altitudeM = value.altitudeM === null || value.altitudeM === undefined
     ? null
     : Number(value.altitudeM);
@@ -55,12 +55,42 @@ function normaliseCameraLocation(value) {
     return null;
   }
 
+  const optionalNumber = (input, minimum = 0, maximum = 100000) => {
+    if (input === null || input === undefined || input === "") return null;
+    const number = Number(input);
+    return Number.isFinite(number) && number >= minimum && number <= maximum
+      ? Number(number.toFixed(1)) : null;
+  };
+  const integer = (input) => Math.max(0, Math.min(100000, Math.trunc(Number(input) || 0)));
+  const grade = ["EXCELLENT", "SUITABLE", "AMBER", "REJECT"].includes(value.grade)
+    ? value.grade
+    : (accuracyM <= 5 ? "EXCELLENT" : accuracyM <= 10 ? "SUITABLE" : accuracyM <= 20 ? "AMBER" : "REJECT");
+
   return {
     lat: Number(lat.toFixed(7)),
     lon: Number(lon.toFixed(7)),
     accuracyM: Number(accuracyM.toFixed(1)),
+    horizontalUncertaintyM: Number(accuracyM.toFixed(1)),
+    horizontalUncertaintySource: "BROWSER_REPORTED_AND_OBSERVED_CLUSTER",
     altitudeM: altitudeM === null ? null : Number(altitudeM.toFixed(1)),
-    source: "BROWSER_GEOLOCATION",
+    altitudeDatum: altitudeM === null ? null : "WGS84_ELLIPSOID",
+    altitudeSource: altitudeM === null ? null : "BROWSER_GEOLOCATION",
+    altitudeAccuracyM: optionalNumber(value.altitudeAccuracyM),
+    source: "BROWSER_GEOLOCATION_MULTI_FIX",
+    calibrationReferencePoint: String(value.calibrationReferencePoint || "PHONE_CROSSHAIR_AT_CAMERA_LENS_REFERENCE").slice(0, 120),
+    phoneReportedAccuracyM: optionalNumber(value.phoneReportedAccuracyM ?? value.reportedAccuracyM),
+    observedSpreadM: optionalNumber(value.observedSpreadM),
+    clusterRadius95M: optionalNumber(value.clusterRadius95M),
+    centreMovement30sM: optionalNumber(value.centreMovement30sM),
+    sampleCountTotal: integer(value.sampleCountTotal),
+    sampleCountAccepted: integer(value.sampleCountAccepted),
+    sampleCountRejected: integer(value.sampleCountRejected),
+    duplicateTimestampCount: integer(value.duplicateTimestampCount),
+    staleTimestampCount: integer(value.staleTimestampCount),
+    calibrationStartedAt: Number.isFinite(Date.parse(value.calibrationStartedAt || "")) ? new Date(value.calibrationStartedAt).toISOString() : null,
+    calibrationCompletedAt: Number.isFinite(Date.parse(value.calibrationCompletedAt || "")) ? new Date(value.calibrationCompletedAt).toISOString() : new Date().toISOString(),
+    grade,
+    l80Evidence: { status: "NOT_INTEGRATED", device: "/dev/ttyUSB0", position: null, separationM: null, checkedAt: null },
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString()
   };
 }
@@ -338,6 +368,7 @@ module.exports = async function handler(req, res) {
         ? {
             saved: true,
             accuracyM: settings.cameraLocation.accuracyM,
+            grade: settings.cameraLocation.grade,
             altitudeAvailable: settings.cameraLocation.altitudeM !== null,
             updatedAt: settings.cameraLocation.updatedAt
           }
@@ -352,3 +383,6 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
+module.exports.normaliseCameraLocation = normaliseCameraLocation;
+module.exports.normaliseStoredSettings = normaliseStoredSettings;
