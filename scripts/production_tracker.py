@@ -30,6 +30,25 @@ RS4_YAW_SIGN = 1
 RS4_PITCH_SIGN = 1
 
 
+async def prepare_rs4_gatt(client, ble, receive, sleep=asyncio.sleep):
+    """Finish the proven RS4 service-discovery/notification handshake."""
+    await sleep(0.8)
+    await asyncio.wait_for(client.start_notify(ble.RX, receive), 6)
+    tx_char = client.services.get_characteristic(ble.TX)
+    if tx_char is None:
+        raise RuntimeError("RS4 TX characteristic not found")
+    size = 0
+    for _ in range(20):
+        try:
+            size = int(tx_char.max_write_without_response_size)
+        except Exception:
+            size = 0
+        if size >= 22:
+            return tx_char
+        await sleep(0.4)
+    raise RuntimeError("RS4 Bluetooth message size is too small")
+
+
 def utc_ms():
     return int(time.time() * 1000)
 
@@ -163,10 +182,7 @@ async def run(args):
         bluetooth_state = "CONNECTING"
         client = BleakClient(ble.DEVICE, timeout=20)
         await asyncio.wait_for(client.connect(), 25)
-        tx_char = client.services.get_characteristic(ble.TX)
-        if tx_char is None:
-            raise RuntimeError("RS4 TX characteristic not found")
-        await asyncio.wait_for(client.start_notify(ble.RX, receive), 6)
+        tx_char = await prepare_rs4_gatt(client, ble, receive)
         deadline = time.monotonic() + 5
         while measured_yaw is None and time.monotonic() < deadline:
             await asyncio.sleep(0.05)
