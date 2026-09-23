@@ -10,15 +10,17 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 SOURCE_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)"
 FORCE=0
 CREDENTIALS_ONLY=0
+CHECK_AUTH=0
 TEMP_ENV=""
 UPDATE_CREDENTIALS=1
 
 usage() {
   cat <<'EOF'
-Usage: sudo bash deploy/pi-bridge/install.sh [--force] [--credentials-only]
+Usage: sudo bash deploy/pi-bridge/install.sh [--force] [--credentials-only] [--check-auth]
 
   --force             Replace an existing credential file without confirmation.
   --credentials-only  Update credentials and restart the installed service only.
+  --check-auth        Check the installed token using the service's EnvironmentFile.
 EOF
 }
 
@@ -26,6 +28,7 @@ for argument in "$@"; do
   case "$argument" in
     --force) FORCE=1 ;;
     --credentials-only) CREDENTIALS_ONLY=1 ;;
+    --check-auth) CHECK_AUTH=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $argument" >&2; usage >&2; exit 2 ;;
   esac
@@ -34,6 +37,22 @@ done
 if [[ $EUID -ne 0 ]]; then
   echo "Please run this installer with sudo." >&2
   exit 1
+fi
+
+if [[ $CHECK_AUTH -eq 1 ]]; then
+  if [[ $FORCE -eq 1 || $CREDENTIALS_ONLY -eq 1 ]]; then
+    echo "--check-auth cannot be combined with credential update options." >&2
+    exit 2
+  fi
+  if [[ ! -r "$ENV_FILE" || ! -x "$INSTALL_DIR/scripts/pi_bridge.py" ]]; then
+    echo "The installed bridge environment or script is missing; run the installer first." >&2
+    exit 1
+  fi
+  exec systemd-run --wait --pipe --collect --quiet \
+    --unit=mikeaircraft-pi-bridge-auth-check \
+    --property="EnvironmentFile=$ENV_FILE" \
+    --property="User=$SERVICE_USER" \
+    /usr/bin/python3 "$INSTALL_DIR/scripts/pi_bridge.py" --check-auth
 fi
 
 if [[ $CREDENTIALS_ONLY -eq 1 ]] && ! systemctl cat "$SERVICE_NAME" >/dev/null 2>&1; then

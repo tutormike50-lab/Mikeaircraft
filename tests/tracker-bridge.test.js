@@ -91,3 +91,25 @@ test('Pi auth diagnostic is read-only and reports only the accepted token finger
     assert.equal(res.body.tokenFingerprint, piBridge.tokenFingerprint('bridge-secret'));
   } finally { restoreEnv(old); }
 });
+
+test('Pi auth failures are classified in protected server diagnostics only', async () => {
+  const old = saveEnv();
+  const priorWarn = console.warn;
+  const warnings = [];
+  console.warn = (...values) => warnings.push(values.join(' '));
+  try {
+    delete process.env.MIKEAIRCRAFT_PI_BRIDGE_TOKEN;
+    let res = response(); await piBridge({ method: 'POST', headers: {}, url: '/api/pi-bridge' }, res);
+    assert.equal(res.code, 401); assert.equal(res.body.error, 'Unauthorised');
+    assert.match(warnings.pop(), /SERVER_TOKEN_MISSING/);
+    process.env.MIKEAIRCRAFT_PI_BRIDGE_TOKEN = 'expected';
+    res = response(); await piBridge({ method: 'POST', headers: {}, url: '/api/pi-bridge' }, res);
+    assert.equal(res.body.piFingerprint, undefined); assert.match(warnings.pop(), /PI_TOKEN_MISSING/);
+    res = response(); await piBridge({ method: 'POST', headers: { authorization: 'Bearer other' }, url: '/api/pi-bridge' }, res);
+    assert.equal(res.body.serverFingerprint, undefined);
+    const warning = warnings.pop();
+    assert.match(warning, /TOKEN_MISMATCH/);
+    assert.match(warning, new RegExp(piBridge.tokenFingerprint('expected')));
+    assert.match(warning, new RegExp(piBridge.tokenFingerprint('other')));
+  } finally { console.warn = priorWarn; restoreEnv(old); }
+});

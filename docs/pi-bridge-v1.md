@@ -40,27 +40,22 @@ tracker's existing runtime dependencies (including Bleak). Logs remain in
 To check authentication without starting the tracker or connecting to BLE, run:
 
 ```sh
-sudo bash -c 'set -a; source /etc/mikeaircraft/pi-bridge.env; set +a; exec /usr/bin/python3 /opt/mikeaircraft/scripts/pi_bridge.py --check-auth'
+sudo bash deploy/pi-bridge/install.sh --check-auth
 ```
 
-The check prints only whether a token was loaded, its first 12 SHA-256 hex
+This runs the installed checker with the same root-owned `EnvironmentFile` that
+systemd loads for the service; it does not source the file in an interactive
+shell. The check prints only whether a token was loaded, its first 12 SHA-256 hex
 characters, the target URL, HTTP status, and whether the dedicated bridge token
 was accepted. It never prints the token or Control PIN and does not read or alter
-tracker/BLE state. A 401 specifically means the Pi bridge token does not match
-the deployed Production `MIKEAIRCRAFT_PI_BRIDGE_TOKEN` (or Production has not
-been redeployed since that value was changed).
-
-If that check returns 401 after the code and service update, create one new strong
-random token, set it once as the Vercel Production
-`MIKEAIRCRAFT_PI_BRIDGE_TOKEN`, redeploy Production, and then run the existing
-non-editing credential update from the Pi checkout:
-
-```sh
-sudo bash deploy/pi-bridge/install.sh --credentials-only --force
-```
-
-Paste that same new token and the existing Control PIN into the hidden prompts,
-then rerun `--check-auth`. Do not edit the environment file by hand.
+tracker/BLE state. A 401 response remains intentionally generic. Inspect the
+Production Function log entry beginning `PI_BRIDGE_AUTH`; it reports one of
+`SERVER_TOKEN_MISSING`, `PI_TOKEN_MISSING`, `TOKEN_MISMATCH`, or
+`WRONG_METHOD_ENDPOINT`. For a mismatch it includes only the Pi and server
+12-character SHA-256 fingerprints. Compare the Pi fingerprint printed by
+`--check-auth` with that log. This is the decisive check for environment/deployment
+propagation and does not require another token rotation or manual environment-file
+edit.
 
 STOP sends SIGINT to let the production tracker's existing neutral/disconnect
 cleanup run, waits 12 seconds, then escalates only if the process is stuck. A
