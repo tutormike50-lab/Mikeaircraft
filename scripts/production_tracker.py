@@ -30,6 +30,12 @@ TELEMETRY_MAX_AGE_S = 2.0
 RS4_YAW_SIGN = 1
 RS4_PITCH_SIGN = 1
 
+RS4_PROTOCOL_REQUESTS = {
+    (0x04, 0x02, 0x00, 0x04, 0x38),
+    (0x04, 0x02, 0x20, 0x04, 0x64),
+    (0x27, 0x02, 0x40, 0x00, 0x00),
+}
+
 
 class BleLifecycleError(RuntimeError):
     """A BLE failure annotated with the operation that first observed it."""
@@ -40,6 +46,55 @@ class BleLifecycleError(RuntimeError):
         suffix = (f"; disconnect_monotonic_s={disconnected_at:.6f}"
                   if disconnected_at is not None else "")
         super().__init__(f"BLE stage={stage}: {detail}{suffix}")
+
+
+def dji_crc(data):
+    value = 0x3692
+    for byte in data:
+        value ^= byte
+        for _ in range(8):
+            value = (value >> 1) ^ (0x8408 if value & 1 else 0)
+    return value
+
+
+class DjiFrameDecoder:
+    """Reassemble complete DJI frames from arbitrarily grouped BLE notifications."""
+
+    def __init__(self):
+        self.buffer = bytearray()
+
+    def feed(self, data):
+        self.buffer.extend(data)
+        frames = []
+        while len(self.buffer) >= 3:
+            if self.buffer[0] != 0x55:
+                del self.buffer[0]
+                continue
+            size = self.buffer[1] | ((self.buffer[2] & 0x03) << 8)
+            if not 13 <= size <= 1023:
+                del self.buffer[0]
+                continue
+            if len(self.buffer) < size:
+                break
+            frame = bytes(self.buffer[:size])
+            if dji_crc(frame[:-2]) != int.from_bytes(frame[-2:], "little"):
+                del self.buffer[0]
+                continue
+            del self.buffer[:size]
+            frames.append(frame)
+        return frames
+
+
+def rs4_protocol_response(frame):
+    """Return the response proven by the official Ronin app capture, if required."""
+    if len(frame) < 13:
+        return None
+    request = (frame[4], frame[5], frame[8], frame[9], frame[10])
+    if request not in RS4_PROTOCOL_REQUESTS:
+        return None
+    response = bytes((0x55, 0x0D, 0x04, 0x33, frame[5], frame[4]))
+    response += frame[6:8] + bytes((0x80, frame[9], frame[10]))
+    return response + struct.pack("<H", dji_crc(response))
 
 
 def client_connected(client):
@@ -204,6 +259,10 @@ async def run(args):
     last_write_at = None
     write_count = 0
     last_command = None
+    frame_decoder = DjiFrameDecoder()
+    protocol_responses = asyncio.Queue()
+    protocol_response_count = 0
+    write_lock = asyncio.Lock()
 
     def record_disconnect(disconnected_client, occurred_at):
         nonlocal bluetooth_state, disconnected_at, disconnect_state
@@ -221,6 +280,7 @@ async def run(args):
                               successful_write_count=write_count,
                               effective_write_hz=effective_write_hz(
                                   write_count, first_write_at, occurred_at),
+                              protocol_response_count=protocol_response_count,
                               last_command=last_command)
 
     disconnected = make_disconnect_callback(
@@ -228,15 +288,32 @@ async def run(args):
 
     def receive(_, data):
         nonlocal measured_yaw, measured_pitch, telemetry_at
-        raw = bytes(data)
-        if len(raw) < 19 or raw[0] != 0x55 or raw[9:11] != bytes((4, 5)):
-            return
-        try:
-            pitch_raw, _, yaw_raw = struct.unpack_from("<hhh", raw[11:-2], 0)
-        except struct.error:
-            return
-        measured_pitch, measured_yaw = pitch_raw / 10.0, yaw_raw / 10.0
-        telemetry_at = time.monotonic()
+        for frame in frame_decoder.feed(data):
+            response = rs4_protocol_response(frame)
+            if response is not None:
+                protocol_responses.put_nowait(response)
+            if len(frame) < 19 or frame[9:11] != bytes((4, 5)):
+                continue
+            try:
+                pitch_raw, _, yaw_raw = struct.unpack_from("<hhh", frame, 11)
+            except struct.error:
+                continue
+            measured_pitch, measured_yaw = pitch_raw / 10.0, yaw_raw / 10.0
+            telemetry_at = time.monotonic()
+
+    async def service_protocol_requests():
+        nonlocal protocol_response_count
+        while True:
+            response = await protocol_responses.get()
+            try:
+                async with write_lock:
+                    await asyncio.wait_for(
+                        client.write_gatt_char(tx_char, response, response=False), 2.0)
+                protocol_response_count += 1
+            except Exception as error:
+                raise BleLifecycleError(
+                    "protocol_response_write", f"{type(error).__name__}: {error}",
+                    disconnected_at) from error
 
     async def send_axes(tilt, pan):
         nonlocal sequence, bluetooth_state, disconnected_at, disconnect_state
@@ -250,8 +327,10 @@ async def run(args):
             raise BleLifecycleError("command_write_precheck", "client is not connected", disconnected_at)
         sequence = (sequence + 1) & 0xFFFF
         try:
-            await asyncio.wait_for(
-                client.write_gatt_char(tx_char, ble.packet(sequence, tilt, pan), response=False), 2.0)
+            async with write_lock:
+                await asyncio.wait_for(
+                    client.write_gatt_char(
+                        tx_char, ble.packet(sequence, tilt, pan), response=False), 2.0)
             written_at = time.monotonic()
             if first_write_at is None:
                 first_write_at = written_at
@@ -321,6 +400,7 @@ async def run(args):
 
     try:
         await connect()
+        responder = asyncio.create_task(service_protocol_requests())
         poller = asyncio.create_task(poll_aircraft())
         last_tick = time.monotonic()
         while True:
@@ -341,12 +421,15 @@ async def run(args):
                         successful_write_count=write_count,
                         effective_write_hz=effective_write_hz(
                             write_count, first_write_at, tick),
+                        protocol_response_count=protocol_response_count,
                         last_command=last_command)
                 bluetooth_state = "FAULT_DISCONNECTED"
                 raise BleLifecycleError("control_loop_precheck", "unexpected disconnect",
                                         disconnected_at)
             if poller.done():
                 poller.result()
+            if responder.done():
+                responder.result()
             target = source.latest(now_ms)
             if telemetry_at is None or tick - telemetry_at > TELEMETRY_MAX_AGE_S:
                 await stop_motion()
@@ -376,6 +459,10 @@ async def run(args):
             poller.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await poller
+        if 'responder' in locals():
+            responder.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await responder
         with contextlib.suppress(Exception):
             await stop_motion()
         if client is not None:

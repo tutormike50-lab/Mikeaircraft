@@ -8,8 +8,9 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from production_tracker import (BleLifecycleError, client_connected, effective_write_hz,
-                                make_disconnect_callback, prepare_rs4_gatt)  # noqa: E402
+from production_tracker import (BleLifecycleError, DjiFrameDecoder, client_connected,
+                                effective_write_hz, make_disconnect_callback,
+                                prepare_rs4_gatt, rs4_protocol_response)  # noqa: E402
 
 
 class FakeTx:
@@ -25,6 +26,32 @@ class FakeTx:
 
 
 class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
+    def test_captured_rs4_requests_produce_exact_official_app_responses(self):
+        captures = [
+            ("551204c70402a8ee0004380000646400bc01",
+             "550d04330204a8ee8004389e9f"),
+            ("551204c70402a9ee2004640000000000e78e",
+             "550d04330204a9ee800464330c"),
+            ("550d0433270207014000003e42",
+             "550d043302270701800000634a"),
+        ]
+        for request, response in captures:
+            self.assertEqual(rs4_protocol_response(bytes.fromhex(request)),
+                             bytes.fromhex(response))
+
+    def test_decoder_reassembles_and_separates_captured_frames(self):
+        first = bytes.fromhex("551204c70402a8ee0004380000646400bc01")
+        second = bytes.fromhex("551204c70402a9ee2004640000000000e78e")
+        decoder = DjiFrameDecoder()
+        self.assertEqual(decoder.feed(first[:7]), [])
+        self.assertEqual(decoder.feed(first[7:] + second), [first, second])
+
+    def test_unrelated_telemetry_does_not_generate_protocol_response(self):
+        telemetry = bytes.fromhex(
+            "553e044b0402a8ee00040507070000a0fe84005b010001b2f7250053d00000"
+            "e4ff0800b3090d3ab8f65f3f07fff73e138f533b0000000001000000008259")
+        self.assertIsNone(rs4_protocol_response(telemetry))
+
     def test_effective_write_rate_counts_intervals(self):
         self.assertEqual(effective_write_hz(0, None, None), 0.0)
         self.assertEqual(effective_write_hz(1, 10.0, 10.0), 0.0)
