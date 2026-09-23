@@ -6,6 +6,7 @@ SERVICE_USER="mikeaircraft"
 INSTALL_DIR="/opt/mikeaircraft"
 CONFIG_DIR="/etc/mikeaircraft"
 ENV_FILE="${CONFIG_DIR}/pi-bridge.env"
+BRIDGE_SCRIPT="${INSTALL_DIR}/scripts/pi_bridge.py"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 SOURCE_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)"
 FORCE=0
@@ -44,7 +45,7 @@ if [[ $CHECK_AUTH -eq 1 ]]; then
     echo "--check-auth cannot be combined with credential update options." >&2
     exit 2
   fi
-  if [[ ! -r "$ENV_FILE" || ! -x "$INSTALL_DIR/scripts/pi_bridge.py" ]]; then
+  if [[ ! -r "$ENV_FILE" || ! -r "$BRIDGE_SCRIPT" ]]; then
     echo "The installed bridge environment or script is missing; run the installer first." >&2
     exit 1
   fi
@@ -52,7 +53,7 @@ if [[ $CHECK_AUTH -eq 1 ]]; then
     --unit=mikeaircraft-pi-bridge-auth-check \
     --property="EnvironmentFile=$ENV_FILE" \
     --property="User=$SERVICE_USER" \
-    /usr/bin/python3 "$INSTALL_DIR/scripts/pi_bridge.py" --check-auth
+    /usr/bin/python3 "$BRIDGE_SCRIPT" --check-auth
 fi
 
 if [[ $CREDENTIALS_ONLY -eq 1 ]] && ! systemctl cat "$SERVICE_NAME" >/dev/null 2>&1; then
@@ -139,6 +140,10 @@ else
   install -d -m 0755 "$INSTALL_DIR" "$INSTALL_DIR/var" "$INSTALL_DIR/var/log"
   if [[ "$SOURCE_DIR" != "$INSTALL_DIR" ]]; then
     cp -a "$SOURCE_DIR/." "$INSTALL_DIR/"
+  fi
+  if [[ ! -r "$ENV_FILE" || ! -r "$BRIDGE_SCRIPT" ]]; then
+    echo "The bridge environment or installed script is missing after installation." >&2
+    exit 1
   fi
   chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
   install -m 0644 "$INSTALL_DIR/deploy/pi-bridge/mikeaircraft-pi-bridge.service" "/etc/systemd/system/$SERVICE_NAME"
