@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
+import urllib.error
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "pi_bridge.py"
 SPEC = importlib.util.spec_from_file_location("pi_bridge", MODULE_PATH)
@@ -49,6 +50,28 @@ class PiBridgeTests(unittest.TestCase):
         self.assertEqual(bridge.process.stdin.value, "TRACK CURRENT\n")
         self.assertEqual(calls[0][1]["env"]["MIKEAIRCRAFT_CONTROL_PIN"], "pin")
         bridge._close_output()
+
+    def test_check_auth_reports_fingerprint_without_secret(self):
+        token = "super-secret-value"
+        response = mock.MagicMock()
+        response.status = 200
+        response.read.return_value = ('{"tokenFingerprint":"' + pi_bridge.token_fingerprint(token) + '"}').encode()
+        response.__enter__.return_value = response
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            result = pi_bridge.check_auth("https://example.test/", token, opener=lambda *args, **kwargs: response)
+        self.assertEqual(result, 0)
+        self.assertNotIn(token, output.getvalue())
+        self.assertIn(pi_bridge.token_fingerprint(token), output.getvalue())
+        self.assertIn("Control PIN is not used", output.getvalue())
+
+    def test_check_auth_identifies_bridge_token_rejection(self):
+        error = urllib.error.HTTPError("https://example.test/api/pi-bridge", 401, "Unauthorized", {}, None)
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            result = pi_bridge.check_auth("https://example.test", "secret", opener=mock.Mock(side_effect=error))
+        self.assertEqual(result, 1)
+        self.assertIn("bridge token rejected", output.getvalue())
 
     def test_stop_sends_sigint_and_waits_for_safe_cleanup(self):
         process = FakeProcess()

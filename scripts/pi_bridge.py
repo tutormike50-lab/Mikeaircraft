@@ -8,10 +8,50 @@ import signal
 import subprocess
 import sys
 import time
+import hashlib
+import urllib.error
 import urllib.request
 
 POLL_SECONDS = 2.0
 STOP_TIMEOUT_SECONDS = 12.0
+
+
+def token_fingerprint(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
+
+def check_auth(base_url, token, opener=urllib.request.urlopen):
+    endpoint = base_url.rstrip("/") + "/api/pi-bridge"
+    request = urllib.request.Request(
+        endpoint, method="GET",
+        headers={"Authorization": "Bearer " + token,
+                 "User-Agent": "MikeAircraft-Pi-Bridge/1"})
+    print("Pi Bridge authentication check")
+    print("  token loaded: yes")
+    print("  token fingerprint (SHA-256): " + token_fingerprint(token))
+    print("  target URL: " + endpoint)
+    try:
+        with opener(request, timeout=10) as response:
+            body = json.loads(response.read().decode("utf-8"))
+            print("  HTTP status: " + str(response.status))
+            print("  credential checked: bridge token (Control PIN is not used)")
+            if body.get("tokenFingerprint") != token_fingerprint(token):
+                print("  result: server fingerprint did not match", file=sys.stderr)
+                return 1
+            print("  result: bridge token accepted")
+            return 0
+    except urllib.error.HTTPError as error:
+        print("  HTTP status: " + str(error.code))
+        print("  credential checked: bridge token (Control PIN is not used)")
+        if error.code == 401:
+            print("  result: bridge token rejected by the deployed Production environment")
+        else:
+            print("  result: server returned an unexpected HTTP error")
+        return 1
+    except (OSError, ValueError) as error:
+        print("  HTTP status: unavailable")
+        print("  result: request failed: " + str(error))
+        return 1
 
 
 class PiBridge:
@@ -175,8 +215,16 @@ def required(name):
 
 
 def main():
+    check_only = sys.argv[1:] == ["--check-auth"]
+    if sys.argv[1:] and not check_only:
+        raise SystemExit("Usage: pi_bridge.py [--check-auth]")
+    base_url = required("MIKEAIRCRAFT_BASE_URL")
+    token = required("MIKEAIRCRAFT_PI_BRIDGE_TOKEN")
+    if check_only:
+        raise SystemExit(check_auth(base_url, token))
+
     import fcntl
-    lock_path = Path(os.environ.get("MIKEAIRCRAFT_PI_BRIDGE_LOCK", "/run/mikeaircraft-pi-bridge.lock"))
+    lock_path = Path(os.environ.get("MIKEAIRCRAFT_PI_BRIDGE_LOCK", "/run/mikeaircraft/pi-bridge.lock"))
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock = lock_path.open("w", encoding="utf-8")
     try:
@@ -184,8 +232,7 @@ def main():
     except BlockingIOError:
         raise SystemExit("Another Pi Bridge instance is already running")
     repo_dir = Path(os.environ.get("MIKEAIRCRAFT_REPO_DIR", Path(__file__).resolve().parent.parent))
-    bridge = PiBridge(required("MIKEAIRCRAFT_BASE_URL"),
-                      required("MIKEAIRCRAFT_PI_BRIDGE_TOKEN"),
+    bridge = PiBridge(base_url, token,
                       required("MIKEAIRCRAFT_CONTROL_PIN"), repo_dir,
                       os.environ.get("MIKEAIRCRAFT_TRACKER_LOG_DIR", str(repo_dir / "var" / "log")))
     try:

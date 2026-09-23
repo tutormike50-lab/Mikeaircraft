@@ -76,3 +76,18 @@ test('Pi heartbeat uses separate bearer secret and receives desired state', asyn
     assert.equal(res.code, 200); assert.equal(res.body.desired, 'TRACKING'); assert.equal(res.body.generation, 9);
   } finally { restoreEnv(old); }
 });
+
+test('Pi auth diagnostic is read-only and reports only the accepted token fingerprint', async () => {
+  const old = saveEnv();
+  process.env.MIKEAIRCRAFT_PI_BRIDGE_TOKEN = '  bridge-secret  ';
+  try {
+    const denied = response(); await piBridge({ method: 'GET', headers: { authorization: 'Bearer wrong' } }, denied);
+    assert.equal(denied.code, 401);
+    assert.equal(denied.body.tokenFingerprint, undefined);
+    const res = response(); await piBridge({ method: 'GET', headers: { authorization: 'Bearer bridge-secret' } }, res);
+    assert.equal(res.code, 200);
+    assert.equal(res.body.credential, 'bridge-token');
+    assert.match(res.body.tokenFingerprint, /^[0-9a-f]{12}$/);
+    assert.equal(res.body.tokenFingerprint, piBridge.tokenFingerprint('bridge-secret'));
+  } finally { restoreEnv(old); }
+});

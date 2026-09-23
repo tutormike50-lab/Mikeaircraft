@@ -4,9 +4,15 @@ const { DEFAULT_DESIRED, desiredState } = require("../lib/tracker-bridge-state")
 const { keys } = require("./tracker-control");
 
 function tokenMatches(given, expected) {
-  if (typeof given !== "string" || !expected || given.length > 512) return false;
-  const a = Buffer.from(given), b = Buffer.from(expected);
+  if (typeof given !== "string" || typeof expected !== "string") return false;
+  const normalGiven = given.trim(), normalExpected = expected.trim();
+  if (!normalGiven || !normalExpected || normalGiven.length > 512) return false;
+  const a = Buffer.from(normalGiven), b = Buffer.from(normalExpected);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function tokenFingerprint(token) {
+  return crypto.createHash("sha256").update(String(token).trim()).digest("hex").slice(0, 12);
 }
 
 function authorised(req) {
@@ -21,8 +27,15 @@ function cleanText(value, length) {
 
 module.exports = async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
-  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "POST required" });
+  if (req.method !== "GET" && req.method !== "POST") return res.status(405).json({ ok: false, error: "GET or POST required" });
   if (!authorised(req)) return res.status(401).json({ ok: false, error: "Unauthorised" });
+  if (req.method === "GET") {
+    return res.status(200).json({
+      ok: true,
+      credential: "bridge-token",
+      tokenFingerprint: tokenFingerprint(process.env.MIKEAIRCRAFT_PI_BRIDGE_TOKEN)
+    });
+  }
   try {
     let body = req.body;
     if (typeof body === "string") body = JSON.parse(body);
@@ -50,3 +63,4 @@ module.exports = async function handler(req, res) {
 };
 
 module.exports.authorised = authorised;
+module.exports.tokenFingerprint = tokenFingerprint;
