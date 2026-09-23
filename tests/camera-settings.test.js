@@ -33,3 +33,11 @@ test("rejects invalid position or uncertainty", () => {
   assert.equal(normaliseCameraLocation({ lat: 91, lon: 14, accuracyM: 4 }), null);
   assert.equal(normaliseCameraLocation({ lat: 50, lon: 14, accuracyM: -1 }), null);
 });
+
+test("persists stable HOME orientation provenance and fixed offsets", () => {
+  const value = normaliseCameraLocation({
+    lat: 50, lon: 14, accuracyM: 6,
+    orientation: { homeTrueAzimuthDeg: 243.24, homeElevationDeg: 3.44, headingOffsetDeg: 1.5, elevationOffsetDeg: -0.5, headingSpreadDeg: 2, elevationSpreadDeg: 1, sampleCount: 20 }
+  });
+  assert.deepEqual(value.orientation, { homeTrueAzimuthDeg: 243.2, homeElevationDeg: 3.4, headingOffsetDeg: 1.5, elevationOffsetDeg: -0.5, headingSpreadDeg: 2, elevationSpreadDeg: 1, sampleCount: 20, source: "IPHONE_DEVICE_ORIENTATION", quality: "STABLE", calibratedAt: value.orientation.calibratedAt });
+});

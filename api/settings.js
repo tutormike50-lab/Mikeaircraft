@@ -65,6 +65,10 @@ function normaliseCameraLocation(value) {
   const grade = ["EXCELLENT", "SUITABLE", "AMBER", "REJECT"].includes(value.grade)
     ? value.grade
     : (accuracyM <= 5 ? "EXCELLENT" : accuracyM <= 10 ? "SUITABLE" : accuracyM <= 20 ? "AMBER" : "REJECT");
+  const orientation = value.orientation && typeof value.orientation === "object" ? value.orientation : null;
+  const homeTrueAzimuthDeg = orientation === null ? null : Number(orientation.homeTrueAzimuthDeg);
+  const homeElevationDeg = orientation === null ? null : Number(orientation.homeElevationDeg);
+  const validOrientation = Number.isFinite(homeTrueAzimuthDeg) && homeTrueAzimuthDeg >= 0 && homeTrueAzimuthDeg < 360 && Number.isFinite(homeElevationDeg) && homeElevationDeg >= -90 && homeElevationDeg <= 90;
 
   return {
     lat: Number(lat.toFixed(7)),
@@ -90,6 +94,18 @@ function normaliseCameraLocation(value) {
     calibrationStartedAt: Number.isFinite(Date.parse(value.calibrationStartedAt || "")) ? new Date(value.calibrationStartedAt).toISOString() : null,
     calibrationCompletedAt: Number.isFinite(Date.parse(value.calibrationCompletedAt || "")) ? new Date(value.calibrationCompletedAt).toISOString() : new Date().toISOString(),
     grade,
+    orientation: validOrientation ? {
+      homeTrueAzimuthDeg: Number(homeTrueAzimuthDeg.toFixed(1)),
+      homeElevationDeg: Number(homeElevationDeg.toFixed(1)),
+      headingOffsetDeg: optionalNumber(orientation.headingOffsetDeg, -180, 180) ?? 0,
+      elevationOffsetDeg: optionalNumber(orientation.elevationOffsetDeg, -90, 90) ?? 0,
+      headingSpreadDeg: optionalNumber(orientation.headingSpreadDeg, 0, 180),
+      elevationSpreadDeg: optionalNumber(orientation.elevationSpreadDeg, 0, 180),
+      sampleCount: integer(orientation.sampleCount),
+      source: "IPHONE_DEVICE_ORIENTATION",
+      quality: "STABLE",
+      calibratedAt: Number.isFinite(Date.parse(orientation.calibratedAt || "")) ? new Date(orientation.calibratedAt).toISOString() : new Date().toISOString()
+    } : null,
     l80Evidence: { status: "NOT_INTEGRATED", device: "/dev/ttyUSB0", position: null, separationM: null, checkedAt: null },
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString()
   };
@@ -319,9 +335,7 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  const requestedCameraLocation = hasCameraLocation
-    ? normaliseCameraLocation(req.body.cameraLocation)
-    : null;
+  let requestedCameraLocation = hasCameraLocation ? normaliseCameraLocation(req.body.cameraLocation) : null;
 
   if (hasCameraLocation && !requestedCameraLocation) {
     return res.status(400).json({
@@ -338,6 +352,10 @@ module.exports = async function handler(req, res) {
     }
     catch {
       // The write below is the authoritative Redis availability check.
+    }
+
+    if (hasCameraLocation && !requestedCameraLocation.orientation && current.cameraLocation?.orientation) {
+      requestedCameraLocation = { ...requestedCameraLocation, orientation: current.cameraLocation.orientation };
     }
 
     const settings = {

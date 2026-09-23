@@ -292,6 +292,8 @@ module.exports = async function handler(req, res) {
           <span class="location-label">CAMERA POSITION</span>
           <span id="cameraLocationStatus" class="location-value warn">CHECKING</span>
         </div>
+        <div class="location-summary"><span class="location-label">HEADING</span><span id="headingStatus" class="location-value warn">NOT READY</span></div>
+        <div class="location-summary"><span class="location-label">ELEVATION</span><span id="elevationStatus" class="location-value warn">NOT READY</span></div>
         <div id="calibrationTarget" class="calibration-target" aria-hidden="true">
           <div class="crosshair" aria-hidden="true"></div>
           <div id="calibrationState" class="calibration-state">ACQUIRING</div>
@@ -342,6 +344,7 @@ module.exports = async function handler(req, res) {
   </main>
 
   <script src="/camera-position.js"></script>
+  <script src="/camera-orientation.js"></script>
   <script>
     const pinInput = document.getElementById("pin");
     const lockStatus = document.getElementById("lockStatus");
@@ -361,6 +364,8 @@ module.exports = async function handler(req, res) {
     const calibrationProgress = document.getElementById("calibrationProgress");
     const calibrationCounts = document.getElementById("calibrationCounts");
     const calibrationEngineering = document.getElementById("calibrationEngineering");
+    const headingStatus = document.getElementById("headingStatus");
+    const elevationStatus = document.getElementById("elevationStatus");
 
     let selectedAirport = null;
     let airports = [];
@@ -372,6 +377,9 @@ module.exports = async function handler(req, res) {
     let locationWatchId = null;
     let locationTimer = null;
     let calibrationSession = null;
+    let orientationSession = null;
+    let orientationListener = null;
+    let orientationReason = "Orientation has not been requested.";
 
     const pinStorageKey = "mikeaircraft-control-pin";
     pinInput.value = sessionStorage.getItem(pinStorageKey) || "";
@@ -628,6 +636,18 @@ module.exports = async function handler(req, res) {
       if (locationTimer !== null) clearInterval(locationTimer);
       locationWatchId = null;
       locationTimer = null;
+      if (orientationListener) window.removeEventListener("deviceorientation", orientationListener, true);
+      orientationListener = null;
+    }
+
+    function renderOrientation() {
+      const snapshot = orientationSession ? orientationSession.snapshot() : { ready: false, reason: orientationReason };
+      headingStatus.textContent = snapshot.ready ? snapshot.homeTrueAzimuthDeg.toFixed(1) + "° TRUE" : "NOT READY";
+      elevationStatus.textContent = snapshot.ready ? (snapshot.homeElevationDeg >= 0 ? "+" : "") + snapshot.homeElevationDeg.toFixed(1) + "°" : "NOT READY";
+      headingStatus.className = "location-value " + (snapshot.ready ? "good" : "warn");
+      elevationStatus.className = "location-value " + (snapshot.ready ? "good" : "warn");
+      headingStatus.title = elevationStatus.title = snapshot.reason || (snapshot.sampleCount + " stable samples");
+      return snapshot;
     }
 
     function renderCalibration(snapshot) {
@@ -650,6 +670,7 @@ module.exports = async function handler(req, res) {
     async function saveCameraLocation(snapshot) {
       const pin = pinInput.value.trim();
       const estimate = snapshot.estimate;
+      const orientation = renderOrientation();
 
       try {
         const response = await fetch("/api/settings", {
@@ -679,6 +700,16 @@ module.exports = async function handler(req, res) {
               calibrationCompletedAt: new Date().toISOString(),
               calibrationReferencePoint: "PHONE_CROSSHAIR_AT_CAMERA_LENS_REFERENCE",
               grade: estimate.grade
+              ,orientation: orientation.ready ? {
+                homeTrueAzimuthDeg: orientation.homeTrueAzimuthDeg,
+                homeElevationDeg: orientation.homeElevationDeg,
+                headingOffsetDeg: orientation.headingOffsetDeg,
+                elevationOffsetDeg: orientation.elevationOffsetDeg,
+                headingSpreadDeg: orientation.headingSpreadDeg,
+                elevationSpreadDeg: orientation.elevationSpreadDeg,
+                sampleCount: orientation.sampleCount,
+                calibratedAt: new Date().toISOString()
+              } : null
             }
           })
         });
@@ -746,7 +777,7 @@ module.exports = async function handler(req, res) {
       saveCameraLocation(snapshot);
     }
 
-    function resetCameraLocation() {
+    async function resetCameraLocation() {
       if (locationBusy) {
         return;
       }
@@ -761,6 +792,18 @@ module.exports = async function handler(req, res) {
         setLocationMessage("This browser does not support location capture. Open the Control Panel on a phone or modern browser.", "bad");
         return;
       }
+
+      orientationSession = CameraOrientationCalibration.createSession({ headingDeg: 0, elevationDeg: 0 });
+      const orientationPermission = await CameraOrientationCalibration.requestPermission(window);
+      if (orientationPermission.granted) {
+        orientationListener = (event) => { orientationSession.add(event); renderOrientation(); };
+        window.addEventListener("deviceorientation", orientationListener, true);
+        orientationReason = "Waiting for iPhone orientation readings.";
+      } else {
+        orientationReason = orientationPermission.reason;
+        orientationSession.unavailable(orientationReason);
+      }
+      renderOrientation();
 
       locationBusy = true;
       resetLocationButton.disabled = true;

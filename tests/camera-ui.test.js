@@ -13,6 +13,10 @@ test("control panel exposes crosshair workflow and continuous fresh geolocation"
   assert.match(html, /CALIBRATION CONFLICT/);
   assert.match(html, /Engineering details/);
   assert.match(html, /snapshot\.acceptanceMet/);
+  assert.match(html, /camera-orientation\.js/);
+  assert.match(html, /CameraOrientationCalibration\.requestPermission\(window\)/);
+  assert.match(html, /HEADING/);
+  assert.match(html, /ELEVATION/);
   assert.doesNotMatch(html, /fewer than 20 fresh fixes/);
   assert.doesNotMatch(html, /getCurrentPosition\(/);
 });
