@@ -75,6 +75,14 @@ module.exports = async function handler(req, res) {
     .good{color:var(--green)}
     .warn{color:var(--amber)}
     .bad{color:var(--red)}
+    .tracker-card{margin-bottom:22px;border-color:#2e7ca3}
+    .tracker-status{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px}
+    .tracker-button{width:100%;min-height:96px;padding:20px;border:2px solid #82eab0;border-radius:15px;background:linear-gradient(135deg,#13804d,#075f3a);color:white;cursor:pointer;font-size:clamp(22px,5vw,34px);font-weight:950;letter-spacing:1px;box-shadow:0 12px 35px rgba(24,160,92,.24)}
+    .tracker-button:hover{background:linear-gradient(135deg,#18a562,#087247)}
+    .tracker-button.stop{border-color:#ff9a9a;background:linear-gradient(135deg,#a82f39,#751e28);box-shadow:0 12px 35px rgba(196,52,65,.22)}
+    .tracker-button.starting{border-color:var(--amber);background:linear-gradient(135deg,#936319,#65410b)}
+    .tracker-button:disabled{cursor:wait;opacity:.68}
+    .tracker-detail{margin:13px 2px 0;color:#9bb2c2;font-size:12px;line-height:1.45}
     .card{
       overflow:hidden;
       border:1px solid var(--line);
@@ -212,6 +220,7 @@ module.exports = async function handler(req, res) {
     @media(max-width:600px){.framing-layout{grid-template-columns:1fr}.framing-stop{margin:8px 0 0}.framing-button{min-height:48px}}
     @media(max-width:700px){
       .statusbar{grid-template-columns:repeat(2,1fr)}
+      .tracker-status{grid-template-columns:1fr}
       .airportgrid{grid-template-columns:repeat(2,1fr)}
       .priority-grid{grid-template-columns:1fr}
     }
@@ -260,6 +269,22 @@ module.exports = async function handler(req, res) {
       <div class="statusitem">
         <span class="statuslabel">LIVE PRIORITY</span>
         <span id="priorityStatus" class="statusvalue good">AUTO</span>
+      </div>
+    </section>
+
+    <section class="card tracker-card operations-only" aria-labelledby="trackerTitle">
+      <div class="cardhead">
+        <h2 id="trackerTitle">Production Tracking</h2>
+        <p>Start or safely stop the tracker through the outbound Pi Bridge.</p>
+      </div>
+      <div class="cardbody">
+        <div class="tracker-status" aria-label="Tracker status">
+          <div class="statusitem"><span class="statuslabel">RASPBERRY PI</span><span id="trackerPiStatus" class="statusvalue warn">CHECKING</span></div>
+          <div class="statusitem"><span class="statuslabel">TRACKER</span><span id="trackerProcessStatus" class="statusvalue warn">CHECKING</span></div>
+          <div class="statusitem"><span class="statuslabel">CURRENT AIRCRAFT</span><span id="trackerAircraft" class="statusvalue">NONE</span></div>
+        </div>
+        <button id="trackerButton" class="tracker-button" type="button" disabled>▶ START TRACKING</button>
+        <p id="trackerDetail" class="tracker-detail" role="status" aria-live="polite">Checking Pi Bridge heartbeat…</p>
       </div>
     </section>
 
@@ -421,6 +446,7 @@ module.exports = async function handler(req, res) {
       rememberPin(pin);
       return true;
     }
+    window.ensureControlAuthentication = ensureAuthentication;
 
     async function loadAuthentication() {
       try {
@@ -874,6 +900,7 @@ module.exports = async function handler(req, res) {
     loadAuthentication();
     loadSettings();
   </script>
+  <script src="/tracker-control.js" defer></script>
   <script src="/control-joystick.js" defer></script>
 </body>
 </html>`;
