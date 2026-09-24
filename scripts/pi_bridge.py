@@ -215,7 +215,8 @@ class PiBridge:
                     self.telemetry = {key: row.get(key) for key in (
                         "source_age_ms", "prediction_age_ms", "aircraft_state_timestamp_ms",
                         "aim_timestamp_ms", "target_true_azimuth_deg", "target_elevation_deg",
-                        "target_yaw_relative_deg", "target_pitch_relative_deg", "status")}
+                        "target_yaw_relative_deg", "target_pitch_relative_deg",
+                        "horizontal_range_m", "status")}
                 if row.get("bluetooth_state"):
                     self.rs4_state = str(row["bluetooth_state"])
             self.diagnostics_offset = handle.tell()

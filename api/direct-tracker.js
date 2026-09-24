@@ -26,10 +26,10 @@ module.exports = async function handler(req, res) {
     if (req.method === "POST") {
       let body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
       const command = String(body?.command || "").toUpperCase();
-      if (!new Set(["TRACKING", "STOPPED", "HOME"]).has(command)) return res.status(400).json({ ok: false, error: "Invalid command" });
-      const aircraftId = command === "TRACKING" ? cleanAircraftId(body.aircraftId) : null;
-      if (command === "TRACKING" && !aircraftId) return res.status(400).json({ ok: false, error: "TRACKING requires a six-character ICAO hex" });
-      const callsign = command === "TRACKING" ? String(body.callsign || aircraftId).trim().slice(0, 24) : null;
+      if (command !== "TRACKING") return res.status(400).json({ ok: false, error: "Direct Tracker accepts only an explicit aircraft lock" });
+      const aircraftId = cleanAircraftId(body.aircraftId);
+      if (!aircraftId) return res.status(400).json({ ok: false, error: "TRACKING requires a six-character ICAO hex" });
+      const callsign = String(body.callsign || aircraftId).trim().slice(0, 24);
       const updatedAt = new Date().toISOString();
       await redis.command(["EVAL", "local g=redis.call('INCR',KEYS[2]); redis.call('SET',KEYS[1],cjson.encode({command=ARGV[1],aircraftId=ARGV[2]~='' and ARGV[2] or cjson.null,callsign=ARGV[3]~='' and ARGV[3] or cjson.null,generation=g,updatedAt=ARGV[4]})); return g", "2", DIRECT_KEY, GENERATION_KEY, command, aircraftId || "", callsign || "", updatedAt]);
     }

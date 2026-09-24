@@ -1,18 +1,30 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const vm = require('node:vm');
 const { directState } = require('../lib/direct-tracker-state');
 const direct = require('../api/direct-tracker');
+const radar = require('../public/direct-tracker');
 
-test('explicit selected ICAO remains authoritative until stop or reselection', () => {
-  const first = directState(JSON.stringify({ command: 'TRACKING', aircraftId: 'abc123', callsign: 'ONE1', generation: 1 }));
-  assert.equal(first.aircraftId, 'abc123');
-  const unchanged = directState(JSON.stringify({ ...first, generation: 1 }));
-  assert.equal(unchanged.aircraftId, 'abc123');
-  const reselection = directState(JSON.stringify({ command: 'TRACKING', aircraftId: 'def456', callsign: 'TWO2', generation: 2 }));
-  assert.equal(reselection.aircraftId, 'def456');
-  assert.equal(directState(JSON.stringify({ command: 'STOPPED', aircraftId: 'def456', generation: 3 })).aircraftId, null);
+test('clicking A makes A authoritative and clicking B explicitly replaces it', async () => {
+  const commands = [], lock = radar.createDirectLock(async command => commands.push(command));
+  await lock.select({ hex: 'abc123', callsign: 'ONE1' });
+  assert.equal(lock.lockedIcao, 'abc123');
+  await lock.select({ hex: 'def456', callsign: 'TWO2' });
+  assert.equal(lock.lockedIcao, 'def456');
+  assert.deepEqual(commands.map(command => command.aircraftId), ['abc123', 'def456']);
+});
+
+test('ADS-B and automatic ribbon updates cannot replace the locked ICAO', async () => {
+  const lock = radar.createDirectLock(async () => {});
+  await lock.select({ hex: 'abc123', callsign: 'ONE1' });
+  const unrelatedUpdates = [
+    { intelligence: { current: { hex: 'def456' }, nextIn: { hex: '111111' }, nextOut: { hex: '222222' } } },
+    { aircraft: [{ hex: 'def456' }, { hex: 'abc123' }] },
+    { aircraft: [{ hex: '999999', state: 'TAKEOFF_ROLL' }] }
+  ];
+  for (const update of unrelatedUpdates) assert.equal(lock.lockedIcao, 'abc123', JSON.stringify(update));
+  lock.applyServerState({ command: 'TRACKING', aircraftId: 'abc123' });
+  assert.equal(lock.lockedIcao, 'abc123');
 });
 
 test('direct control validates ICAO and never accepts implicit target selection', () => {
@@ -21,15 +33,28 @@ test('direct control validates ICAO and never accepts implicit target selection'
   assert.equal(direct.cleanAircraftId(''), null);
 });
 
-test('standalone page has explicit controls and does not use ribbon selection', async () => {
+test('standalone page is click-to-lock with telemetry and no separate movement controls', async () => {
   const handler = require('../api/direct-tracker-page'); let html;
   await handler({}, { setHeader() {}, status() { return this; }, send(value) { html = value; } });
-  for (const id of ['radar','selected','track','stop','home','rawAge','horizon','stateTime','angles','relative']) assert.ok(html.includes('id="'+id+'"'));
+  for (const id of ['radarCanvas','owner','selected','distance','rawAge','horizon','stateTime','angles','relative']) assert.ok(html.includes('id="'+id+'"'));
+  for (const id of ['track','stop','home']) assert.ok(!html.includes('id="'+id+'"'));
+  assert.match(html, /GIMBAL OWNER: DIRECT TRACKER/);
   assert.ok(html.includes('/direct-tracker.js'));
   const client = fs.readFileSync(require.resolve('../public/direct-tracker.js'), 'utf8');
   assert.ok(client.includes('/api/direct-tracker'));
   assert.ok(!client.includes('currentAircraft'));
   assert.ok(!client.includes('nextIn'));
+});
+
+test('radar uses the required 20 km range and 5/10/15/20 km rings', () => {
+  assert.equal(radar.DIRECT_RADAR_RANGE_KM, 20);
+  assert.deepEqual([...radar.DIRECT_RADAR_RINGS_KM], [5, 10, 15, 20]);
+});
+
+test('production tracker controls cannot clear an active direct ownership lock', () => {
+  const source = fs.readFileSync(require.resolve('../api/tracker-control.js'), 'utf8');
+  assert.ok(!source.includes("DEL',KEYS[3]"));
+  assert.ok(!source.includes('direct-tracker:desired'));
 });
 
 test('Vercel exposes the standalone tracker without changing the production root', () => {
