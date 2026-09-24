@@ -50,7 +50,8 @@ module.exports = async function handler(req, res) {
       let nextSettings = '';
       let resultSaved = saved;
       if (next.saveBoresight) {
-        resultSaved = normaliseBoresight({ ...next.saveBoresight, savedAt: new Date(now).toISOString(),
+        resultSaved = normaliseBoresight({ ...next.saveBoresight, enabled: true, schemaVersion: 1,
+          savedAt: new Date(now).toISOString(),
           method: 'DIRECT_TRACKER_JOYSTICK_CENTRE', quality: 'OPERATOR_CENTRED' });
         settings.cameraLocation = { ...(settings.cameraLocation || {}), boresight: resultSaved };
         settings.updatedAt = new Date(now).toISOString(); nextSettings = JSON.stringify(settings);

@@ -104,6 +104,9 @@ class GeometryTarget:
 
 def boresight_corrected_target(target, yaw_deg, pitch_deg):
     """Apply camera-to-gimbal constants only at the final pointing boundary."""
+    # Preserve the ec9b423 path exactly while centering is inactive.
+    if yaw_deg == 0.0 and pitch_deg == 0.0:
+        return target
     if target.status == "HOME" or target.target_yaw_relative_deg is None:
         return target
     return replace(target,

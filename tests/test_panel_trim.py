@@ -84,5 +84,19 @@ class PanelTests(unittest.TestCase):
         self.panel.transport = lambda _: dict(ok=True, connected=True, sessionId=self.panel.session_id, stopRequested=True)
         with self.assertRaisesRegex(PanelFault, 'STOP'): self.panel._exchange({})
 
+    def test_unmarked_persisted_boresight_is_numerically_inert(self):
+        self.panel.transport = lambda _: dict(
+            ok=True, connected=True, sessionId=self.panel.session_id,
+            savedBoresight=dict(yawDeg=4.5, pitchDeg=-3.25))
+        self.panel._exchange({})
+        self.assertEqual(self.panel.correction(), (0.0, 0.0))
+
+    def test_explicitly_saved_current_schema_is_applied(self):
+        self.panel.transport = lambda _: dict(
+            ok=True, connected=True, sessionId=self.panel.session_id,
+            savedBoresight=dict(enabled=True, schemaVersion=1, yawDeg=-0.35, pitchDeg=0.12))
+        self.panel._exchange({})
+        self.assertEqual(self.panel.correction(), (-0.35, 0.12))
+
 
 if __name__ == '__main__': unittest.main()
