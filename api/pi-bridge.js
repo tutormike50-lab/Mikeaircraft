@@ -46,6 +46,23 @@ function cleanText(value, length) {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, length) : null;
 }
 
+function effectiveControl(desired, direct) {
+  if (direct.command === "TRACKING" && direct.aircraftId) {
+    return {
+      owner: "DIRECT_TRACKER",
+      command: "TRACKING",
+      generation: direct.generation,
+      aircraftId: direct.aircraftId
+    };
+  }
+  return {
+    owner: "PRODUCTION",
+    command: desired.desired,
+    generation: desired.generation,
+    aircraftId: null
+  };
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
   if (req.method !== "GET" && req.method !== "POST") {
@@ -86,7 +103,15 @@ module.exports = async function handler(req, res) {
       ["SET", keys.HEARTBEAT_KEY, heartbeat, "EX", "45"],
       ["GET", directKeys.DIRECT_KEY]
     ]);
-    return res.status(200).json({ ok: true, ...desiredState(desired || DEFAULT_DESIRED), direct: directState(direct || DEFAULT_DIRECT), receivedAt: new Date(receivedAt).toISOString() });
+    const normalState = desiredState(desired || DEFAULT_DESIRED);
+    const directCommand = directState(direct || DEFAULT_DIRECT);
+    return res.status(200).json({
+      ok: true,
+      ...normalState,
+      direct: directCommand,
+      control: effectiveControl(normalState, directCommand),
+      receivedAt: new Date(receivedAt).toISOString()
+    });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });
   }
@@ -95,3 +120,4 @@ module.exports = async function handler(req, res) {
 module.exports.authorised = authorised;
 module.exports.authDiagnostic = authDiagnostic;
 module.exports.tokenFingerprint = tokenFingerprint;
+module.exports.effectiveControl = effectiveControl;

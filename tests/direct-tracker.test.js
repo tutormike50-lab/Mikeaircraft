@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { directState } = require('../lib/direct-tracker-state');
 const direct = require('../api/direct-tracker');
+const bridgeApi = require('../api/pi-bridge');
 const radar = require('../public/direct-tracker');
 
 test('clicking A makes A authoritative and clicking B explicitly replaces it', async () => {
@@ -55,6 +56,24 @@ test('production tracker controls cannot clear an active direct ownership lock',
   const source = fs.readFileSync(require.resolve('../api/tracker-control.js'), 'utf8');
   assert.ok(!source.includes("DEL',KEYS[3]"));
   assert.ok(!source.includes('direct-tracker:desired'));
+});
+
+test('a direct click becomes the explicit effective Pi control command', () => {
+  const control = bridgeApi.effectiveControl(
+    { desired: 'TRACKING', generation: 91 },
+    directState(JSON.stringify({ command: 'TRACKING', aircraftId: 'abc123', generation: 7, updatedAt: '2026-09-24T12:00:00Z' }))
+  );
+  assert.deepEqual(control, { owner: 'DIRECT_TRACKER', command: 'TRACKING', generation: 7, aircraftId: 'abc123' });
+});
+
+test('normal START cannot steal effective control from Direct Tracker', () => {
+  const control = bridgeApi.effectiveControl(
+    { desired: 'TRACKING', generation: 999 },
+    { command: 'TRACKING', aircraftId: 'def456', generation: 8 }
+  );
+  assert.equal(control.owner, 'DIRECT_TRACKER');
+  assert.equal(control.aircraftId, 'def456');
+  assert.equal(control.generation, 8);
 });
 
 test('Vercel exposes the standalone tracker without changing the production root', () => {

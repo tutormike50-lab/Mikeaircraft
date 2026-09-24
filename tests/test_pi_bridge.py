@@ -117,6 +117,7 @@ class PiBridgeTests(unittest.TestCase):
         bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
         bridge.reconcile({"desired": "TRACKING", "generation": 8,
                           "direct": {"command": "TRACKING", "generation": 2,
+                                     "aircraftId": "abc123",
                                      "updatedAt": "2026-09-24T10:00:00Z"}})
         self.assertIn("--direct", calls[0])
         with mock.patch.object(pi_bridge.os, "killpg", create=True):
@@ -125,6 +126,30 @@ class PiBridgeTests(unittest.TestCase):
                                          "updatedAt": "2026-09-24T10:01:00Z"}})
         self.assertEqual(bridge.tracker_state, "STOPPED")
         self.assertIsNone(bridge.process)
+
+    def test_click_control_starts_direct_tracker_without_normal_start(self):
+        calls = []
+        bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.reconcile({"desired": "STOPPED", "generation": 0,
+                          "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                                      "generation": 11, "aircraftId": "abc123"}})
+        self.assertEqual(bridge.tracker_state, "STARTING")
+        self.assertIn("--direct", calls[0])
+        bridge._close_output()
+
+    def test_clicking_b_transfers_direct_target_without_normal_tracker_takeover(self):
+        calls = []
+        bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.reconcile({"desired": "TRACKING", "generation": 99,
+                          "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                                      "generation": 12, "aircraftId": "abc123"}})
+        bridge.reconcile({"desired": "TRACKING", "generation": 100,
+                          "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                                      "generation": 13, "aircraftId": "def456"}})
+        self.assertEqual(len(calls), 1)
+        self.assertIn("--direct", calls[0])
+        self.assertEqual(bridge.process_mode, "DIRECT")
+        bridge._close_output()
 
 
 if __name__ == "__main__":

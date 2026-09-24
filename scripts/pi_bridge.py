@@ -188,9 +188,19 @@ class PiBridge:
         print(self.fault, flush=True)
 
     def reconcile(self, desired):
+        control = desired.get("control") or {}
+        if control:
+            if (control.get("owner") == "DIRECT_TRACKER" and
+                    control.get("command") == "TRACKING" and control.get("aircraftId")):
+                self.start(int(control.get("generation") or 0), direct=True)
+            elif control.get("owner") == "PRODUCTION" and control.get("command") == "TRACKING":
+                self.start(int(control.get("generation") or 0), direct=False)
+            else:
+                self.stop()
+            return
         direct = desired.get("direct") or {}
         if direct.get("updatedAt"):
-            if direct.get("command") in ("TRACKING", "HOME"):
+            if direct.get("command") == "TRACKING" and direct.get("aircraftId"):
                 self.start(int(direct.get("generation") or 0), direct=True)
             else:
                 self.stop()
