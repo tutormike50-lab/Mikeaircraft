@@ -21,11 +21,27 @@ def fov_deg(reference_size_mm, equivalent_focal_length):
 
 def normalized_frame_offset(angular_error_deg, fov_deg_value):
     """Positive yaw/pitch error maps right/up; +/-0.5 is the corresponding edge."""
-    return 0.5 * math.tan(math.radians(angular_error_deg)) / math.tan(math.radians(fov_deg_value / 2.0))
+    try:
+        angular_error = float(angular_error_deg)
+        field_of_view = float(fov_deg_value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if (not math.isfinite(angular_error) or not math.isfinite(field_of_view)
+            or field_of_view <= 0.0 or field_of_view >= 180.0):
+        return None
+    return 0.5 * math.tan(math.radians(angular_error)) / math.tan(math.radians(field_of_view / 2.0))
 
 
 def angular_tolerance_deg(normalized_limit, fov_deg_value):
-    return math.degrees(math.atan(2.0 * abs(normalized_limit) * math.tan(math.radians(fov_deg_value / 2.0))))
+    try:
+        limit = float(normalized_limit)
+        field_of_view = float(fov_deg_value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if (not math.isfinite(limit) or not math.isfinite(field_of_view)
+            or field_of_view <= 0.0 or field_of_view >= 180.0):
+        return None
+    return math.degrees(math.atan(2.0 * abs(limit) * math.tan(math.radians(field_of_view / 2.0))))
 
 
 @dataclass(frozen=True)

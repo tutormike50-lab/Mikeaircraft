@@ -312,6 +312,19 @@ class Diagnostics:
     def write(self, target, output, telemetry, bluetooth_state, optics):
         row = target.as_dict()
         optics_fields = optics.as_dict()
+        frame_x = normalized_frame_offset(output.yaw_error_deg, optics.horizontal_fov_deg)
+        frame_y = normalized_frame_offset(output.pitch_error_deg, optics.vertical_fov_deg)
+        acquire_yaw = angular_tolerance_deg(0.25, optics.horizontal_fov_deg)
+        acquire_pitch = angular_tolerance_deg(0.25, optics.vertical_fov_deg)
+        track_yaw = angular_tolerance_deg(0.10, optics.horizontal_fov_deg)
+        track_pitch = angular_tolerance_deg(0.10, optics.vertical_fov_deg)
+        invalid_optics_diagnostics = [name for name, value in (
+            ("frame_x", frame_x), ("frame_y", frame_y),
+            ("acquire_yaw_tolerance", acquire_yaw),
+            ("acquire_pitch_tolerance", acquire_pitch),
+            ("track_yaw_tolerance", track_yaw),
+            ("track_pitch_tolerance", track_pitch),
+        ) if value is None]
         row.update({
             "monotonic_s": time.monotonic(),
             "estimated_rs4_yaw_deg": telemetry.get("estimated_yaw"),
@@ -339,14 +352,15 @@ class Diagnostics:
             "stabilisation_mode": optics.stabilisation_mode,
             "optics_source": optics.source,
             "optics_source_confidence": optics.source_confidence,
-            "predicted_controller_residual_frame_x_n_not_observed": normalized_frame_offset(
-                output.yaw_error_deg, optics.horizontal_fov_deg),
-            "predicted_controller_residual_frame_y_n_not_observed": normalized_frame_offset(
-                output.pitch_error_deg, optics.vertical_fov_deg),
-            "acquire_yaw_tolerance_deg": angular_tolerance_deg(0.25, optics.horizontal_fov_deg),
-            "acquire_pitch_tolerance_deg": angular_tolerance_deg(0.25, optics.vertical_fov_deg),
-            "track_yaw_tolerance_deg": angular_tolerance_deg(0.10, optics.horizontal_fov_deg),
-            "track_pitch_tolerance_deg": angular_tolerance_deg(0.10, optics.vertical_fov_deg),
+            "optics_diagnostics_valid": not invalid_optics_diagnostics,
+            "optics_diagnostics_error": (None if not invalid_optics_diagnostics else
+                                           "invalid: " + ", ".join(invalid_optics_diagnostics)),
+            "predicted_controller_residual_frame_x_n_not_observed": frame_x,
+            "predicted_controller_residual_frame_y_n_not_observed": frame_y,
+            "acquire_yaw_tolerance_deg": acquire_yaw,
+            "acquire_pitch_tolerance_deg": acquire_pitch,
+            "track_yaw_tolerance_deg": track_yaw,
+            "track_pitch_tolerance_deg": track_pitch,
         })
         self.handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
 
