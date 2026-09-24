@@ -28,6 +28,7 @@ from camera_optics import angular_tolerance_deg, camera_optics, normalized_frame
 
 CAMERA_REFERENCE_URL = "https://mikeaircraft.vercel.app/api/camera-reference"
 CAMERA_OPTICS_URL = "https://mikeaircraft.vercel.app/api/settings"
+DIRECT_TRACKER_URL = "https://mikeaircraft.vercel.app/api/direct-tracker"
 CONTROL_PERIOD_S = 0.05
 ADS_B_POLL_S = 0.20
 TELEMETRY_MAX_AGE_S = 2.0
@@ -183,6 +184,20 @@ def current_selection(engine):
     return {"aircraft_id": identifier,
             "callsign": str(current.get("callsign") or identifier).strip(),
             "status": str(current.get("state") or "CURRENT").strip().upper()}
+
+
+def direct_selection(url, pin):
+    """Read only the explicit Direct Tracker command; never consult ribbon state."""
+    payload = read_json_url(url, {"User-Agent": "MikeAircraft-Production-Tracker",
+                                  "X-MikeAircraft-Control-Pin": pin})
+    if payload.get("command") != "TRACKING":
+        return None
+    identifier = clean_hex(payload.get("aircraftId"))
+    if len(identifier) != 6 or any(character not in "0123456789abcdef" for character in identifier):
+        return None
+    return {"aircraft_id": identifier,
+            "callsign": str(payload.get("callsign") or identifier).strip(),
+            "status": "DIRECT"}
 
 
 @dataclass(frozen=True)
@@ -524,9 +539,14 @@ async def run(args):
         while True:
             requested_at = time.monotonic()
             try:
-                engine, feed = await asyncio.gather(
-                    asyncio.to_thread(ble.fetch_engine), asyncio.to_thread(local.read_local_feed))
-                selection = current_selection(engine)
+                if args.direct:
+                    selection, feed = await asyncio.gather(
+                        asyncio.to_thread(direct_selection, args.direct_tracker_url, args.pin),
+                        asyncio.to_thread(local.read_local_feed))
+                else:
+                    engine, feed = await asyncio.gather(
+                        asyncio.to_thread(ble.fetch_engine), asyncio.to_thread(local.read_local_feed))
+                    selection = current_selection(engine)
                 new_id = selection and selection["aircraft_id"]
                 if new_id != selected_id:
                     selected_id = new_id
@@ -643,6 +663,8 @@ def main(argv=None):
     parser.add_argument("--track", action="store_true", help="enable the production hardware loop")
     parser.add_argument("--camera-reference-url", default=CAMERA_REFERENCE_URL)
     parser.add_argument("--camera-optics-url", default=CAMERA_OPTICS_URL)
+    parser.add_argument("--direct", action="store_true", help="use only the explicit Direct Tracker ICAO command")
+    parser.add_argument("--direct-tracker-url", default=DIRECT_TRACKER_URL)
     parser.add_argument("--effective-latency", type=configured_effective_latency_s,
                         default=configured_effective_latency_s(),
                         help="downstream aim latency in seconds (persistent env: MIKEAIRCRAFT_EFFECTIVE_LATENCY_S)")

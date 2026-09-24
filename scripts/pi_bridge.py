@@ -77,13 +77,16 @@ class PiBridge:
         self.rs4_state = None
         self.fault = None
         self.attempted_generation = None
+        self.process_mode = None
+        self.telemetry = None
 
     def heartbeat(self):
         self.refresh_process()
         payload = json.dumps({"trackerState": self.tracker_state,
                               "currentAircraft": self.current_aircraft,
                               "rs4State": self.rs4_state,
-                              "fault": self.fault}).encode("utf-8")
+                              "fault": self.fault,
+                              "telemetry": self.telemetry}).encode("utf-8")
         request = urllib.request.Request(
             self.endpoint, data=payload, method="POST",
             headers={"Authorization": "Bearer " + self.token,
@@ -92,12 +95,16 @@ class PiBridge:
         with self.opener(request, timeout=10) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    def start(self, generation):
+    def start(self, generation, direct=False):
+        mode = "DIRECT" if direct else "PRODUCTION"
+        if self.process is not None and self.process.poll() is None and self.process_mode == mode:
+            return
         if self.process is not None and self.process.poll() is None:
+            self.stop()
+        attempt = (mode, generation)
+        if self.attempted_generation == attempt:
             return
-        if self.attempted_generation == generation:
-            return
-        self.attempted_generation = generation
+        self.attempted_generation = attempt
         self.log_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(self.now()))
         self.diagnostics_path = self.log_dir / ("production-tracker-" + stamp + ".jsonl")
@@ -106,6 +113,8 @@ class PiBridge:
         self.output_handle = output_path.open("a", encoding="utf-8", buffering=1)
         command = [sys.executable, str(self.repo_dir / "scripts" / "production_tracker.py"),
                    "--track", "--log", str(self.diagnostics_path)]
+        if direct:
+            command.append("--direct")
         environment = os.environ.copy()
         environment["MIKEAIRCRAFT_CONTROL_PIN"] = self.control_pin
         try:
@@ -121,6 +130,7 @@ class PiBridge:
             self.rs4_state = None
             self.fault = None
             self.diagnostics_offset = 0
+            self.process_mode = mode
         except Exception as error:
             if self.process is not None and self.process.poll() is None:
                 try:
@@ -157,6 +167,8 @@ class PiBridge:
         self.current_aircraft = None
         self.rs4_state = None
         self.fault = None
+        self.process_mode = None
+        self.telemetry = None
 
     def refresh_process(self):
         process = self.process
@@ -176,9 +188,14 @@ class PiBridge:
         print(self.fault, flush=True)
 
     def reconcile(self, desired):
-        generation = int(desired.get("generation") or 0)
-        if desired.get("desired") == "TRACKING":
-            self.start(generation)
+        direct = desired.get("direct") or {}
+        if direct.get("updatedAt"):
+            if direct.get("command") in ("TRACKING", "HOME"):
+                self.start(int(direct.get("generation") or 0), direct=True)
+            else:
+                self.stop()
+        elif desired.get("desired") == "TRACKING":
+            self.start(int(desired.get("generation") or 0), direct=False)
         else:
             self.stop()
 
@@ -195,6 +212,10 @@ class PiBridge:
                 if "aircraft_id" in row:
                     self.current_aircraft = str(row["aircraft_id"]) if row["aircraft_id"] else None
                     self.tracker_state = "TRACKING"
+                    self.telemetry = {key: row.get(key) for key in (
+                        "source_age_ms", "prediction_age_ms", "aircraft_state_timestamp_ms",
+                        "aim_timestamp_ms", "target_true_azimuth_deg", "target_elevation_deg",
+                        "target_yaw_relative_deg", "target_pitch_relative_deg", "status")}
                 if row.get("bluetooth_state"):
                     self.rs4_state = str(row["bluetooth_state"])
             self.diagnostics_offset = handle.tell()

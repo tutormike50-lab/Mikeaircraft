@@ -112,6 +112,20 @@ class PiBridgeTests(unittest.TestCase):
         self.assertIn("[REDACTED]", bridge.fault)
         report.assert_called_once_with(bridge.fault, flush=True)
 
+    def test_direct_mode_bypasses_production_and_stop_remains_authoritative(self):
+        calls = []
+        bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.reconcile({"desired": "TRACKING", "generation": 8,
+                          "direct": {"command": "TRACKING", "generation": 2,
+                                     "updatedAt": "2026-09-24T10:00:00Z"}})
+        self.assertIn("--direct", calls[0])
+        with mock.patch.object(pi_bridge.os, "killpg", create=True):
+            bridge.reconcile({"desired": "TRACKING", "generation": 8,
+                              "direct": {"command": "STOPPED", "generation": 3,
+                                         "updatedAt": "2026-09-24T10:01:00Z"}})
+        self.assertEqual(bridge.tracker_state, "STOPPED")
+        self.assertIsNone(bridge.process)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,8 @@ const crypto = require("crypto");
 const { createRedisClient } = require("../lib/services/redis");
 const { DEFAULT_DESIRED, desiredState } = require("../lib/tracker-bridge-state");
 const { keys } = require("./tracker-control");
+const { keys: directKeys } = require("./direct-tracker");
+const { directState, DEFAULT_DIRECT } = require("../lib/direct-tracker-state");
 
 function tokenMatches(given, expected) {
   if (typeof given !== "string" || typeof expected !== "string") return false;
@@ -76,13 +78,15 @@ module.exports = async function handler(req, res) {
       trackerState: body.trackerState,
       currentAircraft: cleanText(body.currentAircraft, 80),
       rs4State: cleanText(body.rs4State, 80),
-      fault: cleanText(body.fault, 300)
+      fault: cleanText(body.fault, 300),
+      telemetry: body.telemetry && typeof body.telemetry === "object" ? body.telemetry : null
     });
-    const [desired] = await redis.pipeline([
+    const [desired, , direct] = await redis.pipeline([
       ["GET", keys.DESIRED_KEY],
-      ["SET", keys.HEARTBEAT_KEY, heartbeat, "EX", "45"]
+      ["SET", keys.HEARTBEAT_KEY, heartbeat, "EX", "45"],
+      ["GET", directKeys.DIRECT_KEY]
     ]);
-    return res.status(200).json({ ok: true, ...desiredState(desired || DEFAULT_DESIRED), receivedAt: new Date(receivedAt).toISOString() });
+    return res.status(200).json({ ok: true, ...desiredState(desired || DEFAULT_DESIRED), direct: directState(direct || DEFAULT_DIRECT), receivedAt: new Date(receivedAt).toISOString() });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });
   }

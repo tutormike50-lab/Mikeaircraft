@@ -1,4 +1,7 @@
 {
+  "rewrites": [
+    { "source": "/direct-tracker", "destination": "/api/direct-tracker-page" }
+  ],
   "redirects": [
     {
       "source": "/",

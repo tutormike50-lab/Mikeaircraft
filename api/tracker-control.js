@@ -30,8 +30,8 @@ module.exports = async function handler(req, res) {
       const updatedAt = new Date().toISOString();
       await redis.command([
         "EVAL",
-        "local g=redis.call('INCR',KEYS[2]); redis.call('SET',KEYS[1],cjson.encode({desired=ARGV[1],generation=g,updatedAt=ARGV[2]})); return g",
-        "2", DESIRED_KEY, GENERATION_KEY, body.desired, updatedAt
+        "local g=redis.call('INCR',KEYS[2]); redis.call('SET',KEYS[1],cjson.encode({desired=ARGV[1],generation=g,updatedAt=ARGV[2]})); redis.call('DEL',KEYS[3]); return g",
+        "3", DESIRED_KEY, GENERATION_KEY, "mikeaircraft:direct-tracker:desired:v1", body.desired, updatedAt
       ]);
     }
     return res.status(200).json(await readState(redis));
