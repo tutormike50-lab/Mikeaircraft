@@ -23,9 +23,11 @@ import traceback
 import urllib.request
 
 from production_tracking import AircraftObservation, CameraReference, ControllerV1, GeometryTargetSource, wrap180
+from camera_optics import angular_tolerance_deg, camera_optics, normalized_frame_offset
 
 
 CAMERA_REFERENCE_URL = "https://mikeaircraft.vercel.app/api/camera-reference"
+CAMERA_OPTICS_URL = "https://mikeaircraft.vercel.app/api/settings"
 CONTROL_PERIOD_S = 0.05
 ADS_B_POLL_S = 0.20
 TELEMETRY_MAX_AGE_S = 2.0
@@ -159,6 +161,14 @@ def load_camera_reference(url, pin):
     if not payload.get("ok"):
         raise RuntimeError(payload.get("error") or "CameraReference unavailable")
     return CameraReference.from_api(payload.get("cameraReference") or {})
+
+
+def load_camera_optics(url):
+    payload = read_json_url(url)
+    value = (payload.get("settings") or {}).get("cameraOptics") or {}
+    return camera_optics(value.get("slider_position_0_1", 0.0),
+                         value.get("stabilisation_mode", "STANDARD_OR_OFF"),
+                         value.get("timestamp_ms", utc_ms()))
 
 
 def clean_hex(value):
@@ -299,8 +309,9 @@ class Diagnostics:
     def __init__(self, path):
         self.handle = Path(path).open("a", encoding="utf-8", buffering=1)
 
-    def write(self, target, output, telemetry, bluetooth_state):
+    def write(self, target, output, telemetry, bluetooth_state, optics):
         row = target.as_dict()
+        optics_fields = optics.as_dict()
         row.update({
             "monotonic_s": time.monotonic(),
             "estimated_rs4_yaw_deg": telemetry.get("estimated_yaw"),
@@ -320,6 +331,22 @@ class Diagnostics:
             "final_rs4_pan_command": output.pan_command,
             "final_rs4_tilt_command": output.tilt_command,
             "bluetooth_state": bluetooth_state,
+            "camera_optics": optics_fields,
+            "slider_position": optics.slider_position_0_1,
+            "equivalent_focal_length_mm": optics.equivalent_focal_length_mm,
+            "horizontal_fov_deg": optics.horizontal_fov_deg,
+            "vertical_fov_deg": optics.vertical_fov_deg,
+            "stabilisation_mode": optics.stabilisation_mode,
+            "optics_source": optics.source,
+            "optics_source_confidence": optics.source_confidence,
+            "predicted_controller_residual_frame_x_n_not_observed": normalized_frame_offset(
+                output.yaw_error_deg, optics.horizontal_fov_deg),
+            "predicted_controller_residual_frame_y_n_not_observed": normalized_frame_offset(
+                output.pitch_error_deg, optics.vertical_fov_deg),
+            "acquire_yaw_tolerance_deg": angular_tolerance_deg(0.25, optics.horizontal_fov_deg),
+            "acquire_pitch_tolerance_deg": angular_tolerance_deg(0.25, optics.vertical_fov_deg),
+            "track_yaw_tolerance_deg": angular_tolerance_deg(0.10, optics.horizontal_fov_deg),
+            "track_pitch_tolerance_deg": angular_tolerance_deg(0.10, optics.vertical_fov_deg),
         })
         self.handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
 
@@ -338,6 +365,11 @@ async def run(args):
     import virtual_hill_tracker as ble
 
     camera = await asyncio.to_thread(load_camera_reference, args.camera_reference_url, args.pin)
+    try:
+        optics = await asyncio.to_thread(load_camera_optics, args.camera_optics_url)
+    except Exception:
+        # Optics is diagnostic-only; a settings outage must never prevent tracking.
+        optics = camera_optics(0.0, "STANDARD_OR_OFF", utc_ms())
     source = GeometryTargetSource(camera, effective_latency_s=args.effective_latency)
     controller = ControllerV1()
     client = None
@@ -500,10 +532,21 @@ async def run(args):
                                   exception=str(error))
             await asyncio.sleep(max(0.0, ADS_B_POLL_S - (time.monotonic() - requested_at)))
 
+    async def poll_optics():
+        nonlocal optics
+        while True:
+            try:
+                optics = await asyncio.to_thread(load_camera_optics, args.camera_optics_url)
+            except Exception as error:
+                diagnostics.event("camera_optics_poll_failure", exception_type=type(error).__name__,
+                                  exception=str(error))
+            await asyncio.sleep(2.0)
+
     try:
         await connect()
         responder = asyncio.create_task(service_protocol_requests())
         poller = asyncio.create_task(poll_aircraft())
+        optics_poller = asyncio.create_task(poll_optics())
         last_tick = time.monotonic()
         while True:
             tick = time.monotonic()
@@ -553,7 +596,7 @@ async def run(args):
                 "effective_write_hz": effective_write_hz(
                     write_count, first_write_at, last_write_at),
                 "last_command": last_command,
-            }, bluetooth_state)
+            }, bluetooth_state, optics)
             await asyncio.sleep(max(0.0, CONTROL_PERIOD_S - (time.monotonic() - tick)))
     finally:
         # Cleanup is deliberately best-effort and may never replace the first fault.
@@ -561,6 +604,10 @@ async def run(args):
             poller.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await poller
+        if 'optics_poller' in locals():
+            optics_poller.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await optics_poller
         if 'responder' in locals():
             responder.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -581,6 +628,7 @@ def main(argv=None):
     parser.add_argument("--check", action="store_true", help="validate configuration without network or hardware")
     parser.add_argument("--track", action="store_true", help="enable the production hardware loop")
     parser.add_argument("--camera-reference-url", default=CAMERA_REFERENCE_URL)
+    parser.add_argument("--camera-optics-url", default=CAMERA_OPTICS_URL)
     parser.add_argument("--effective-latency", type=configured_effective_latency_s,
                         default=configured_effective_latency_s(),
                         help="downstream aim latency in seconds (persistent env: MIKEAIRCRAFT_EFFECTIVE_LATENCY_S)")

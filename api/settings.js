@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const { authorised } = require("../lib/control-auth");
+const { buildCameraOptics } = require("../lib/camera-optics");
 
 const VERSION = "0.4";
 const SETTINGS_KEY = "mikeaircraft:control:settings";
@@ -25,6 +26,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   priorityMode: "AUTO",
   priorityUntil: null,
   cameraLocation: null,
+  cameraOptics: buildCameraOptics(),
   updatedAt: null
 });
 
@@ -128,6 +130,7 @@ function publicSettings(settings) {
       : 0,
     cameraLocationConfigured: Boolean(settings.cameraLocation),
     cameraLocationUpdatedAt: settings.cameraLocation?.updatedAt || null,
+    cameraOptics: buildCameraOptics(settings.cameraOptics),
     updatedAt: settings.updatedAt
   };
 }
@@ -206,7 +209,8 @@ function normaliseStoredSettings(value) {
     storiesEnabled: false,
     priorityMode: priorityActive ? requestedPriority : "AUTO",
     priorityUntil: priorityActive ? new Date(priorityUntilMs).toISOString() : null,
-    cameraLocation: normaliseCameraLocation(parsed?.cameraLocation)
+    cameraLocation: normaliseCameraLocation(parsed?.cameraLocation),
+    cameraOptics: buildCameraOptics(parsed?.cameraOptics)
   };
 }
 
@@ -306,8 +310,10 @@ module.exports = async function handler(req, res) {
     typeof req.body === "object" &&
     Object.prototype.hasOwnProperty.call(req.body, "priorityMode")
   );
+  const hasCameraOptics = Boolean(req.body && typeof req.body === "object" &&
+    Object.prototype.hasOwnProperty.call(req.body, "cameraOptics"));
 
-  if (!hasAirport && !hasCameraLocation && !hasPriorityMode) {
+  if (!hasAirport && !hasCameraLocation && !hasPriorityMode && !hasCameraOptics) {
     return res.status(400).json({
       ok: false,
       error: "No supported setting was supplied"
@@ -369,6 +375,7 @@ module.exports = async function handler(req, res) {
           ? null
           : new Date(Date.now() + PRIORITY_DURATION_MS).toISOString()
       } : {}),
+      ...(hasCameraOptics ? { cameraOptics: buildCameraOptics(req.body.cameraOptics) } : {}),
       updatedAt: new Date().toISOString()
     };
 

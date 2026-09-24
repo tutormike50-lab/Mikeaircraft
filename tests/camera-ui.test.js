@@ -44,3 +44,15 @@ test("camera calibration has a dedicated route while field controls link to it",
   assert.match(page, /POSITION[\s\S]*HEADING[\s\S]*ELEVATION/);
   assert.match(page, /navigator\.geolocation\.watchPosition/);
 });
+
+test("field controls expose a persisted touch-friendly manual camera zoom", async () => {
+  const handler = require("../api/control");
+  let html = "";
+  await handler({ query: {} }, { setHeader() {}, status() { return this; }, send(value) { html = value; } });
+  assert.match(html, /<h2 id="cameraZoomTitle">Camera Zoom<\/h2>/);
+  assert.match(html, /type="range" min="0" max="1" step="0\.001"/);
+  assert.match(html, /WIDE · 0 ZOOM/);
+  assert.match(html, /source MANUAL · confidence ESTIMATED/);
+  assert.match(html, /cameraOptics:/);
+  assert.match(html, /cameraZoom\.addEventListener\("change", saveCameraOptics\)/);
+});

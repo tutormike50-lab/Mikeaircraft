@@ -29,6 +29,14 @@ test("legacy persisted camera location is safely upgraded", () => {
   assert.equal(settings.cameraLocation.altitudeDatum, null);
 });
 
+test("camera optics is persisted independently from CameraReference", () => {
+  const settings = normaliseStoredSettings(JSON.stringify({ cameraLocation: { lat: 50, lon: 14, accuracyM: 14 }, cameraOptics: { slider_position_0_1: 0.75, stabilisation_mode: "DYNAMIC", timestamp_ms: 456 } }));
+  assert.equal(settings.cameraLocation.lat, 50);
+  assert.equal(settings.cameraOptics.slider_position_0_1, 0.75);
+  assert.equal(settings.cameraOptics.stabilisation_mode, "DYNAMIC");
+  assert.equal(settings.cameraOptics.timestamp_ms, 456);
+});
+
 test("rejects invalid position or uncertainty", () => {
   assert.equal(normaliseCameraLocation({ lat: 91, lon: 14, accuracyM: 4 }), null);
   assert.equal(normaliseCameraLocation({ lat: 50, lon: 14, accuracyM: -1 }), null);

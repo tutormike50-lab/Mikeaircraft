@@ -201,6 +201,7 @@ module.exports = async function handler(req, res) {
     .calibration-counts{color:var(--blue-soft);font-weight:800}
     .engineering{margin-top:14px;text-align:left;color:#9db3c3;font-size:12px;line-height:1.55}.engineering summary{cursor:pointer;color:#bcd5e4;font-weight:800}.engineering pre{white-space:pre-wrap;font:inherit}
     .footnote{margin:18px 4px 0;color:#6f8799;font-size:12px;line-height:1.5}
+    .zoom-card{margin-top:22px;border-color:#2e7ca3}.zoom-scale{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;font-weight:900}.zoom-slider{width:100%;height:52px;accent-color:var(--green);cursor:pointer;touch-action:pan-y}.zoom-readouts{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:12px}.zoom-readouts div{padding:13px;border:1px solid #294f69;border-radius:10px;background:#081a29}.zoom-readouts strong{display:block;margin-top:5px;color:var(--blue-soft);font-size:20px;font-variant-numeric:tabular-nums}.zoom-mode{margin-top:16px;padding:11px;border:1px solid #4382a5;border-radius:9px;background:#0a293f;color:white}.zoom-message{min-height:22px;margin-top:12px;color:#9db3c3;font-size:13px}
     .framing-card{margin-top:22px}
     .framing-layout{display:grid;grid-template-columns:260px 1fr;gap:28px;align-items:center}
     .framing-pad{position:relative;width:240px;height:240px;margin:auto;border:2px solid #4283a8;border-radius:50%;background:radial-gradient(circle,#164569,#071827);touch-action:none;user-select:none;cursor:grab;outline-offset:5px}
@@ -217,7 +218,7 @@ module.exports = async function handler(req, res) {
     .framing-readouts{display:flex;gap:25px;margin:20px 0;font-variant-numeric:tabular-nums}
     .framing-readouts strong{display:block;margin-top:6px;font-size:24px;color:var(--blue-soft)}
     #framingStatus{min-height:48px;line-height:1.5;margin:16px 0}
-    @media(max-width:600px){.framing-layout{grid-template-columns:1fr}.framing-stop{margin:8px 0 0}.framing-button{min-height:48px}}
+    @media(max-width:600px){.framing-layout{grid-template-columns:1fr}.framing-stop{margin:8px 0 0}.framing-button{min-height:48px}.zoom-readouts{grid-template-columns:repeat(2,1fr)}}
     @media(max-width:700px){
       .statusbar{grid-template-columns:repeat(2,1fr)}
       .tracker-status{grid-template-columns:1fr}
@@ -315,6 +316,23 @@ module.exports = async function handler(req, res) {
       </div>
     </section>
 
+    <section class="card zoom-card operations-only" aria-labelledby="cameraZoomTitle">
+      <div class="cardhead"><h2 id="cameraZoomTitle">Camera Zoom</h2><p>Match this manual estimate to the Canon XA60 optical zoom. It changes framing diagnostics only, never aircraft pointing.</p></div>
+      <div class="cardbody">
+        <div class="zoom-scale"><span>WIDE · 0 ZOOM</span><span>TELE · ~600 mm</span></div>
+        <input id="cameraZoom" class="zoom-slider" type="range" min="0" max="1" step="0.001" value="0" aria-label="Camera optical zoom from wide to telephoto">
+        <div class="zoom-readouts">
+          <div><span class="statuslabel">ZOOM</span><strong id="zoomPercent">0%</strong></div>
+          <div><span class="statuslabel">EQUIVALENT</span><strong id="zoomFocal">30.5 mm</strong></div>
+          <div><span class="statuslabel">HFOV</span><strong id="zoomHfov">63.45°</strong></div>
+          <div><span class="statuslabel">VFOV</span><strong id="zoomVfov">38.35°</strong></div>
+        </div>
+        <label for="stabilisationMode" class="statuslabel" style="margin-top:16px">STABILISATION MODE</label>
+        <select id="stabilisationMode" class="zoom-mode"><option value="STANDARD_OR_OFF">Standard IS / IS off</option><option value="DYNAMIC">Dynamic IS</option></select>
+        <p id="zoomMessage" class="zoom-message" role="status" aria-live="polite">Source MANUAL · confidence ESTIMATED</p>
+      </div>
+    </section>
+
     <section class="card location-card calibration-only">
       <div class="cardhead">
         <h2>Camera Calibration</h2>
@@ -400,6 +418,13 @@ module.exports = async function handler(req, res) {
     const calibrationEngineering = document.getElementById("calibrationEngineering");
     const headingStatus = document.getElementById("headingStatus");
     const elevationStatus = document.getElementById("elevationStatus");
+    const cameraZoom = document.getElementById("cameraZoom");
+    const stabilisationMode = document.getElementById("stabilisationMode");
+    const zoomPercent = document.getElementById("zoomPercent");
+    const zoomFocal = document.getElementById("zoomFocal");
+    const zoomHfov = document.getElementById("zoomHfov");
+    const zoomVfov = document.getElementById("zoomVfov");
+    const zoomMessage = document.getElementById("zoomMessage");
 
     let selectedAirport = null;
     let airports = [];
@@ -501,6 +526,37 @@ module.exports = async function handler(req, res) {
         : "No camera position has been saved";
     }
 
+    function renderCameraOptics(optics) {
+      const z = Math.max(0, Math.min(1, Number(optics?.slider_position_0_1) || 0));
+      const mode = optics?.stabilisation_mode === "DYNAMIC" ? "DYNAMIC" : "STANDARD_OR_OFF";
+      const limits = mode === "DYNAMIC" ? [32, 640] : [30.5, 627];
+      const focal = limits[0] * Math.pow(limits[1] / limits[0], z);
+      const diagonal = Math.hypot(36, 24);
+      const width = diagonal * 16 / Math.hypot(16, 9);
+      const height = diagonal * 9 / Math.hypot(16, 9);
+      const fov = (dimension) => 2 * Math.atan(dimension / (2 * focal)) * 180 / Math.PI;
+      cameraZoom.value = z;
+      stabilisationMode.value = mode;
+      zoomPercent.textContent = Math.round(z * 100) + "%";
+      zoomFocal.textContent = focal.toFixed(1) + " mm";
+      zoomHfov.textContent = fov(width).toFixed(2) + "°";
+      zoomVfov.textContent = fov(height).toFixed(2) + "°";
+    }
+
+    async function saveCameraOptics() {
+      try {
+        if (!await ensureAuthentication()) { zoomMessage.textContent = "Enter your private control PIN once for this browser."; zoomMessage.className = "zoom-message warn"; return; }
+        zoomMessage.textContent = "Saving manual optics estimate…";
+        const response = await fetch("/api/settings", { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cameraOptics: { slider_position_0_1: Number(cameraZoom.value), stabilisation_mode: stabilisationMode.value, timestamp_ms: Date.now() } }) });
+        const data = await response.json();
+        if (response.status === 401) forgetPin();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Camera zoom save failed");
+        renderCameraOptics(data.settings.cameraOptics);
+        zoomMessage.textContent = "SAVED · source MANUAL · confidence ESTIMATED";
+        zoomMessage.className = "zoom-message good";
+      } catch (error) { zoomMessage.textContent = error.message; zoomMessage.className = "zoom-message bad"; }
+    }
+
     function renderAirports() {
       grid.innerHTML = "";
 
@@ -547,6 +603,7 @@ module.exports = async function handler(req, res) {
         );
         priorityMode = data.settings?.priorityMode || "AUTO";
         priorityUntil = data.settings?.priorityUntil || null;
+        renderCameraOptics(data.settings?.cameraOptics);
         renderPriority();
         setMessage(redisConnected ? "Choose an airport when you are ready." : "Redis is unavailable; airport changes cannot be saved.", redisConnected ? "" : "bad");
         renderAirports();
@@ -895,6 +952,9 @@ module.exports = async function handler(req, res) {
     priorityButtons.forEach((button) => {
       button.addEventListener("click", () => savePriority(button.dataset.priority));
     });
+    cameraZoom.addEventListener("input", () => renderCameraOptics({ slider_position_0_1: cameraZoom.value, stabilisation_mode: stabilisationMode.value }));
+    cameraZoom.addEventListener("change", saveCameraOptics);
+    stabilisationMode.addEventListener("change", () => { renderCameraOptics({ slider_position_0_1: cameraZoom.value, stabilisation_mode: stabilisationMode.value }); saveCameraOptics(); });
     setInterval(renderPriority, 1000);
 
     loadAuthentication();
