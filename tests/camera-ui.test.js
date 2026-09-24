@@ -7,6 +7,10 @@ test("control panel exposes crosshair workflow and continuous fresh geolocation"
   await handler({}, { setHeader() {}, status() { return this; }, send(value) { html = value; } });
   assert.match(html, /class="crosshair"/);
   assert.match(html, /AUTO CALIBRATE CAMERA POSITION/);
+  assert.match(html, /Fixes received:/);
+  assert.match(html, /BLOCKING:/);
+  assert.match(html, /snapshot\.blockingCondition/);
+  assert.match(html, /snapshot\.elapsedSeconds >= 30 && snapshot\.receivedCount === 0/);
   assert.match(html, /navigator\.geolocation\.watchPosition/);
   assert.match(html, /enableHighAccuracy: true/);
   assert.match(html, /maximumAge: 0/);

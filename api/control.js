@@ -756,17 +756,22 @@ module.exports = async function handler(req, res) {
       const estimate = snapshot.estimate;
       calibrationState.textContent = snapshot.state;
       calibrationState.className = "calibration-state " + (snapshot.state === "GOOD" ? "good" : snapshot.state.indexOf("POOR") === 0 ? "bad" : "warn");
-      calibrationProgress.style.width = Math.min(100, snapshot.elapsedSeconds / 90 * 100) + "%";
+      calibrationProgress.style.width = Math.min(100, snapshot.elapsedSeconds / 180 * 100) + "%";
       calibrationCounts.textContent = snapshot.totalCount + " fresh fixes · " + Math.floor(snapshot.elapsedSeconds) + " seconds";
       calibrationEngineering.textContent = estimate
-        ? "Accepted: " + estimate.acceptedCount + " / " + snapshot.totalCount +
-          "\\nDuplicate timestamps: " + snapshot.duplicateCount + " · stale: " + snapshot.staleCount +
+        ? "State: " + snapshot.state + " · elapsed: " + Math.floor(snapshot.elapsedSeconds) + " / 180 s" +
+          "\\nFixes received: " + snapshot.receivedCount + " · accepted: " + estimate.acceptedCount + " / " + snapshot.requiredCount + " required · rejected: " + (snapshot.rejectedInputCount + estimate.rejectedCount) +
+          "\\nLast rejection: " + snapshot.lastRejectionReason + " · last fix age: " + (snapshot.lastFixAgeSeconds === null ? "none" : snapshot.lastFixAgeSeconds.toFixed(1) + " s") +
           "\\nPhone reported accuracy: ±" + estimate.reportedAccuracyM.toFixed(1) + " m" +
           "\\nObserved RMS spread: " + estimate.observedSpreadM.toFixed(1) + " m" +
           "\\n95% cluster radius: " + estimate.clusterRadius95M.toFixed(1) + " m" +
           "\\nLast-30-second centre movement: " + (estimate.centreMovement30sM === null ? "calculating" : estimate.centreMovement30sM.toFixed(1) + " m") +
-          "\\nConservative uncertainty: ±" + estimate.horizontalUncertaintyM.toFixed(1) + " m · " + estimate.grade
-        : "Waiting for enough fresh fixes to estimate the position cluster.";
+          "\\nConservative uncertainty: ±" + estimate.horizontalUncertaintyM.toFixed(1) + " m · " + estimate.grade +
+          "\\nBLOCKING: " + snapshot.blockingConditions.join(" · ")
+        : "State: " + snapshot.state + " · elapsed: " + Math.floor(snapshot.elapsedSeconds) + " / 180 s" +
+          "\\nFixes received: " + snapshot.receivedCount + " · accepted: 0 / " + snapshot.requiredCount + " required · rejected: " + snapshot.rejectedInputCount +
+          "\\nLast rejection: " + snapshot.lastRejectionReason +
+          "\\nBLOCKING: " + snapshot.blockingCondition;
     }
 
     async function saveCameraLocation(snapshot) {
@@ -855,9 +860,9 @@ module.exports = async function handler(req, res) {
         locationBusy = false;
         resetLocationButton.disabled = false;
         resetLocationButton.textContent = "TRY AUTO CALIBRATE AGAIN";
-        cameraLocationStatus.textContent = "CALIBRATION CONFLICT";
+        cameraLocationStatus.textContent = snapshot.blockingCondition;
         cameraLocationStatus.className = "location-value bad";
-        setLocationMessage("CALIBRATION CONFLICT — the required fix count, accuracy, cluster, outlier, or stability conditions were not met in 180 seconds, so the previous saved position was preserved.", "bad");
+        setLocationMessage(snapshot.blockingCondition + " — " + snapshot.blockingConditions.join(" · ") + ". The previous saved position was preserved.", "bad");
         return;
       }
       if (snapshot.estimate.grade === "REJECT") {
@@ -940,7 +945,8 @@ module.exports = async function handler(req, res) {
         const snapshot = calibrationSession.snapshot();
         renderCalibration(snapshot);
         cameraLocationStatus.textContent = snapshot.state;
-        if (snapshot.elapsedSeconds >= 180) completeCalibration(true);
+        if (snapshot.elapsedSeconds >= 30 && snapshot.receivedCount === 0) completeCalibration(true);
+        else if (snapshot.elapsedSeconds >= 180) completeCalibration(true);
         else if (snapshot.acceptanceMet) completeCalibration(false);
       }, 1000);
     }

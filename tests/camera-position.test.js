@@ -117,6 +117,30 @@ test("required-condition failures remain rejected at 180 seconds", () => {
   assert.equal(sessionWith(start, unstable).snapshot(start + 180000).acceptanceMet, false);
 });
 
+test("snapshot reports the exact condition blocking acceptance", () => {
+  const start = 100000;
+  const inaccurate = sessionWith(start, stationaryFixes(start, 8, 10.01)).snapshot(start + 60000);
+  assert.equal(inaccurate.blockingCondition, "INSUFFICIENT ACCURACY");
+  assert.deepEqual(inaccurate.blockingConditions, ["INSUFFICIENT ACCURACY"]);
+  assert.equal(inaccurate.receivedCount, 8);
+  assert.equal(inaccurate.requiredCount, 8);
+
+  const empty = createSession(start).snapshot(start + 60000);
+  assert.equal(empty.blockingCondition, "NO GEOLOCATION UPDATES");
+  assert.equal(empty.lastFixAgeSeconds, null);
+});
+
+test("snapshot distinguishes rejected input fixes from spatial outliers", () => {
+  const start = 100000;
+  const session = sessionWith(start, stationaryFixes(start, 8));
+  session.add(fix(start, 60, 0, 0), start + 60000);
+  session.add({ timestamp: start - 10000, lat: 50, lon: 14, accuracyM: 4 }, start + 60000);
+  const snapshot = session.snapshot(start + 60000);
+  assert.equal(snapshot.receivedCount, 10);
+  assert.equal(snapshot.rejectedInputCount, 2);
+  assert.equal(snapshot.lastRejectionReason, "STALE GEOLOCATION FIX");
+});
+
 test("a rejected spatial outlier prevents acceptance", () => {
   const start = 100000;
   const fixes = stationaryFixes(start, 8);
