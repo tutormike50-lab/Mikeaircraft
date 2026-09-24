@@ -379,14 +379,20 @@ module.exports = async function handler(req, res) {
         <div>
           <span class="statuslabel">TRACKED AIRCRAFT</span><strong id="framingTarget">No aircraft</strong>
           <div class="framing-readouts">
-            <div><span class="statuslabel">PAN CORRECTION</span><strong id="framingPan">+0.00°</strong></div>
-            <div><span class="statuslabel">TILT CORRECTION</span><strong id="framingTilt">+0.00°</strong></div>
+            <div><span class="statuslabel">YAW ADJUSTMENT</span><strong id="framingPan">+0.00°</strong></div>
+            <div><span class="statuslabel">PITCH ADJUSTMENT</span><strong id="framingTilt">+0.00°</strong></div>
+          </div>
+          <div class="framing-readouts">
+            <div><span class="statuslabel">SAVED YAW BORESIGHT</span><strong id="savedBoresightYaw">+0.00°</strong></div>
+            <div><span class="statuslabel">SAVED PITCH BORESIGHT</span><strong id="savedBoresightPitch">+0.00°</strong></div>
           </div>
           <label for="framingSpeed">Adjustment speed </label>
           <select id="framingSpeed" class="framing-speed"><option value="fine">Fine</option><option value="normal">Normal</option></select>
           <p id="framingStatus" role="status" aria-live="polite">Not connected. The Pi joystick-enabled tracker must be running first.</p>
-          <button type="button" id="framingConnect" class="framing-button">CONNECT JOYSTICK</button>
-          <button type="button" id="framingReset" class="framing-button" disabled>CENTRE TRIM</button>
+          <button type="button" id="framingConnect" class="framing-button">START ADJUST</button>
+          <button type="button" id="framingSave" class="framing-button" disabled>SAVE ADJUST</button>
+          <button type="button" id="framingCancel" class="framing-button" disabled>CANCEL ADJUST</button>
+          <button type="button" id="framingReset" class="framing-button" hidden disabled>CENTRE TRIM</button>
           <button type="button" id="framingStop" class="framing-button framing-stop" disabled>REQUEST STOP</button>
           <p class="location-note">Corrections are gently rate-limited and bounded to ±5° for this run. Release retains the trim; CENTRE TRIM smoothly returns it to zero. AUTO tracking remains authoritative and Tower HOME is unchanged. Network STOP is not a substitute for the gimbal’s physical stop.</p>
         </div>

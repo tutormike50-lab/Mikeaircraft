@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const { authorised } = require("../lib/control-auth");
 const { buildCameraOptics } = require("../lib/camera-optics");
+const { normaliseBoresight } = require("../lib/boresight");
 
 const VERSION = "0.4";
 const SETTINGS_KEY = "mikeaircraft:control:settings";
@@ -109,6 +110,7 @@ function normaliseCameraLocation(value) {
       quality: "STABLE",
       calibratedAt: Number.isFinite(Date.parse(orientation.calibratedAt || "")) ? new Date(orientation.calibratedAt).toISOString() : new Date().toISOString()
     } : null,
+    boresight: normaliseBoresight(value.boresight),
     readiness: {
       position: true,
       heading: validOrientation,
@@ -372,6 +374,9 @@ module.exports = async function handler(req, res) {
         ok: false,
         error: "Complete CameraReference is not calibrated; previous calibration was preserved"
       });
+    }
+    if (hasCameraLocation && !Object.prototype.hasOwnProperty.call(req.body.cameraLocation || {}, "boresight")) {
+      requestedCameraLocation.boresight = normaliseBoresight(current.cameraLocation?.boresight);
     }
 
     const settings = {

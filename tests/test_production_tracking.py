@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from production_tracking import (  # noqa: E402
     AircraftObservation, CameraReference, ControllerV1, GeometryTargetSource,
+    boresight_corrected_target,
 )
 
 
@@ -154,6 +155,18 @@ class ProductionTrackingTests(unittest.TestCase):
         self.assertTrue(self.source.update(later))
         target = self.source.latest(self.t0 + 1000)
         self.assertGreater(target.target_yaw_rate_deg_s, 0.0)
+
+    def test_boresight_changes_only_final_angles_not_rates_or_ownership(self):
+        self.source.update(self.observation)
+        target = self.source.latest(self.t0)
+        corrected = boresight_corrected_target(target, -0.35, 0.12)
+        self.assertAlmostEqual(corrected.target_yaw_relative_deg,
+                               target.target_yaw_relative_deg - 0.35)
+        self.assertAlmostEqual(corrected.target_pitch_relative_deg,
+                               target.target_pitch_relative_deg + 0.12)
+        self.assertEqual(corrected.target_yaw_rate_deg_s, target.target_yaw_rate_deg_s)
+        self.assertEqual(corrected.target_pitch_rate_deg_s, target.target_pitch_rate_deg_s)
+        self.assertEqual(corrected.aircraft_id, target.aircraft_id)
 
 
 if __name__ == "__main__":

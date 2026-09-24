@@ -5,6 +5,7 @@
   const pad = el('framingPad'), knob = el('framingKnob'), status = el('framingStatus');
   if (!pad) return;
   const connect = el('framingConnect'), stop = el('framingStop'), reset = el('framingReset');
+  const save = el('framingSave'), cancel = el('framingCancel');
   const speed = el('framingSpeed'), pin = el('pin');
   const buttons = Array.from(document.querySelectorAll('[data-frame-direction]'));
   let state = null, checkedAt = 0, enabled = false, busy = false;
@@ -24,15 +25,20 @@
     return enabled && state?.ready && performance.now() - checkedAt < 2000 && !document.hidden;
   }
   function paint() {
-    const can = ready();
+    const can = ready() && state?.adjusting;
     pad.setAttribute('aria-disabled', String(!can));
     buttons.forEach(b => { b.disabled = !can; });
     reset.disabled = !can || (!resetting && !(state?.applied?.pan || state?.applied?.tilt));
     stop.disabled = !enabled || !state?.connected || state?.stopRequested;
+    connect.disabled = busy || Boolean(state?.adjusting) || Boolean(state?.command);
+    save.disabled = !can || Boolean(state?.command);
+    cancel.disabled = !state?.adjusting || Boolean(state?.command);
     const signed = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '°';
     el('framingPan').textContent = signed(state?.applied?.pan || 0);
     el('framingTilt').textContent = signed(state?.applied?.tilt || 0);
     el('framingTarget').textContent = state?.target || 'No aircraft';
+    el('savedBoresightYaw').textContent = signed(state?.savedBoresight?.yawDeg || 0);
+    el('savedBoresightPitch').textContent = signed(state?.savedBoresight?.pitchDeg || 0);
     if (!can) release();
   }
   function accept(data) {
@@ -48,7 +54,8 @@
       message(data.stopRequested ? 'STOP requested. Check the camera has stopped; use physical STOP if needed.' :
         !data.connected ? 'Pi controller not connected. No camera commands can be sent.' :
         data.command ? 'Correction sent — waiting for the Pi.' :
-        data.ready ? 'Ready. Drag towards where the camera should point; release to keep the correction.' :
+        data.ready && data.adjusting ? 'Adjusting. Drag towards where the camera should point; automatic tracking continues.' :
+        data.ready ? 'Tracking ready. Press START ADJUST to establish a zero adjustment baseline.' :
         data.mode === 'TRACKING' ? 'Acquiring aircraft — joystick waits until the camera is near its commanded aim.' :
         'Controller: ' + data.mode + '. Joystick is available during tracking only.');
     }
@@ -105,8 +112,22 @@
   connect.addEventListener('click', async () => {
     if (busy) return;
     release(); epoch++; enabled = true; state = null;
-    message('Checking the Pi controller…'); await pump();
+    message('Starting a known adjustment baseline…');
+    try {
+      state = await request(); checkedAt = performance.now();
+      state = await request({ action: 'start-adjust', sessionId: state.sessionId }); checkedAt = performance.now();
+      accept(state); pump();
+    } catch (error) { fail(error); }
   });
+  async function finish(action, success) {
+    if (!state?.adjusting || busy || state.command) return;
+    release(); busy = true;
+    try { accept(await request({ action, sessionId: state.sessionId })); message(success); }
+    catch (error) { fail(error); }
+    finally { busy = false; paint(); if (enabled) pump(); }
+  }
+  save.addEventListener('click', () => finish('save-adjust', 'Adjustment saved. The same pointing target remains active.'));
+  cancel.addEventListener('click', () => finish('cancel-adjust', 'Adjustment cancelled. Returning to the last saved boresight.'));
   stop.addEventListener('click', async () => {
     release(); enabled = false; epoch++; clearTimeout(pollTimer); paint();
     message('Requesting STOP…');

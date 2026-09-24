@@ -61,6 +61,14 @@ test("camera optics is persisted independently from CameraReference", () => {
   assert.equal(settings.cameraOptics.stabilisation_mode, "DYNAMIC");
   assert.equal(settings.cameraOptics.timestamp_ms, 456);
 });
+test("saved boresight survives CameraReference reload and is independent of optics", () => {
+  const settings = normaliseStoredSettings(JSON.stringify({ cameraLocation: completeLocation({
+    boresight: { yawDeg: -0.35, pitchDeg: 0.12, savedAt: "2026-09-24T12:00:00.000Z", method: "DIRECT_TRACKER_JOYSTICK_CENTRE", quality: "OPERATOR_CENTRED" }
+  }), cameraOptics: { slider_position_0_1: 1 } }));
+  assert.equal(settings.cameraLocation.boresight.yawDeg, -0.35);
+  assert.equal(settings.cameraLocation.boresight.pitchDeg, 0.12);
+  assert.equal(settings.cameraOptics.slider_position_0_1, 1);
+});
 
 test("rejects invalid position or uncertainty", () => {
   assert.equal(normaliseCameraLocation({ lat: 91, lon: 14, accuracyM: 4 }), null);

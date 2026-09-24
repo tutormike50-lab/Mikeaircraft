@@ -41,6 +41,7 @@ class PanelTrim:
         self.reported_at = clock()
         self.report = dict(mode='WAITING', ready=False, target='', telemetryAge=999, tickAge=999)
         self.applied = dict(revision=0, pan=0.0, tilt=0.0)
+        self.saved = dict(yawDeg=0.0, pitchDeg=0.0)
         self.pending = None
         self.deadline = 0
 
@@ -78,6 +79,10 @@ class PanelTrim:
             raise PanelFault('Panel session is no longer connected')
         with self.lock:
             self.last_reply = self.clock()
+            saved = data.get('savedBoresight') or {}
+            if all(isinstance(saved.get(k), (int, float)) and not isinstance(saved.get(k), bool)
+                   and math.isfinite(saved[k]) and abs(saved[k]) <= 5 for k in ('yawDeg', 'pitchDeg')):
+                self.saved = dict(yawDeg=float(saved['yawDeg']), pitchDeg=float(saved['pitchDeg']))
             cmd = data.get('command')
             if cmd is not None:
                 remaining = (cmd['expiresAt'] - data['serverNow']) / 1000 - elapsed
@@ -140,13 +145,19 @@ class PanelTrim:
                     values = [cmd.get('pan'), cmd.get('tilt')]
                     if (type(cmd.get('revision')) is not int or cmd['revision'] <= self.applied['revision']
                         or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or abs(v) > 5 for v in values)
-                        or abs(values[0] - self.applied['pan']) > 0.25000001
-                        or abs(values[1] - self.applied['tilt']) > 0.25000001):
+                        or (cmd.get('rebase') not in ('save', 'cancel') and
+                            (abs(values[0] - self.applied['pan']) > 0.25000001
+                             or abs(values[1] - self.applied['tilt']) > 0.25000001))):
                         self.reason = 'Invalid framing correction rejected'
                         raise PanelFault(self.reason)
                     self.applied = dict(revision=cmd['revision'], pan=values[0], tilt=values[1])
                     print(f"FRAMING accepted revision={cmd['revision']} pan={values[0]:+.3f} tilt={values[1]:+.3f}; HOME unchanged", flush=True)
             return self.applied['pan'], self.applied['tilt']
+
+    def correction(self):
+        pan, tilt = self.offsets()
+        with self.lock:
+            return self.saved['yawDeg'] + pan, self.saved['pitchDeg'] + tilt
 
     def close(self):
         self.closed.set()
