@@ -14,21 +14,19 @@ function element() {
   };
 }
 function setup() {
-  const ids = Object.fromEntries(['framingPad','framingKnob','framingStatus','framingConnect','framingStop','framingReset','framingSave','framingCancel','framingSpeed','framingPan','framingTilt','framingTarget','savedBoresightYaw','savedBoresightPitch','pin'].map(k => [k, element()]));
+  const ids = Object.fromEntries(['framingPad','framingKnob','framingStatus','framingConnect','framingStop','framingReset','framingSpeed','framingPan','framingTilt','framingTarget','pin'].map(k => [k, element()]));
   ids.pin.value = 'fake-pin'; ids.framingSpeed.value = 'normal';
   const buttons = ['ArrowLeft','ArrowUp','ArrowDown','ArrowRight'].map(key => ({ ...element(), dataset: { frameDirection: key } }));
   const document = { ...element(), hidden: false, getElementById: k => ids[k], querySelectorAll: () => buttons };
   const window = element(), calls = [], timers = new Map();
   let nextTimer = 1, now = 0, fail = false;
   let response = { ok: true, connected: true, ready: true, sessionId: 'session-1234567890', target: 'TEST', revision: 0,
-    commandWindowUntil: 2000, applied: { revision: 0, pan: 0, tilt: 0 }, savedBoresight: { yawDeg: 0, pitchDeg: 0 }, adjusting: false, command: null };
+    commandWindowUntil: 2000, applied: { revision: 0, pan: 0, tilt: 0 }, command: null };
   const context = { document, window, AbortController, crypto: { randomUUID: () => 'request-1234567890' },
     performance: { now: () => now }, setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; },
     clearTimeout(id) { timers.delete(id); }, setInterval() {},
-    async fetch(url, opts) { const body = opts.body ? JSON.parse(opts.body) : null; calls.push({ url, opts, body });
+    async fetch(url, opts) { calls.push({ url, opts, body: opts.body ? JSON.parse(opts.body) : null });
       if (fail) throw new Error('network lost');
-      if (body?.action === 'start-adjust') response.adjusting = true;
-      if (body?.action === 'save-adjust' || body?.action === 'cancel-adjust') response.adjusting = false;
       return { ok: true, json: async () => structuredClone(response) }; }
   };
   vm.runInNewContext(source, context);
@@ -68,7 +66,7 @@ test('hidden tab and network failure disable joystick; no automatic replay', asy
   assert.equal(s.ids.framingPad.attrs['aria-disabled'], 'true');
   s.document.hidden = false; await s.document.emit('visibilitychange');
   assert.equal(s.ids.framingPad.attrs['aria-disabled'], 'true');
-  await s.ids.framingConnect.emit('click'); s.fail(); await s.window.emit('offline');
+  await s.ids.framingConnect.emit('click'); s.fail(); await s.runTimer();
   assert.equal(s.ids.framingPad.attrs['aria-disabled'], 'true');
 });
 test('STOP is explicit and never claims physical confirmation', async () => {
@@ -76,15 +74,16 @@ test('STOP is explicit and never claims physical confirmation', async () => {
   assert.equal(s.calls.at(-1).body.action, 'stop');
   assert.match(s.ids.framingStatus.textContent, /not physically confirmed/);
 });
-test('SAVE and CANCEL are available only during an explicit adjustment session', async () => {
+test('centre trim requests gentle bounded steps toward zero', async () => {
   const s = setup();
+  s.state({ applied: { revision: 4, pan: 1, tilt: -0.5 }, revision: 4 });
   await s.ids.framingConnect.emit('click');
-  await new Promise(setImmediate);
-  assert.equal(s.ids.framingSave.disabled, false);
-  await s.ids.framingSave.emit('click');
-  await new Promise(setImmediate);
-  assert.ok(s.calls.some(call => call.body?.action === 'save-adjust'));
-  assert.equal(s.ids.framingPad.attrs['aria-disabled'], 'true');
+  await s.ids.framingReset.emit('click');
+  s.tick(200); await s.runTimer();
+  const body = s.calls.filter(c => c.body?.action === 'trim').at(-1).body;
+  assert.ok(body.pan < 1 && body.pan >= 0.75);
+  assert.ok(body.tilt > -0.5 && body.tilt <= -0.25);
+  assert.ok(Math.abs(body.pan - 1) <= 0.25 && Math.abs(body.tilt + 0.5) <= 0.25);
 });
 test('existing panel still serves airport, priority and location controls', async () => {
   const handler = require('../api/control'); let html;

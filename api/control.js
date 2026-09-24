@@ -283,6 +283,11 @@ module.exports = async function handler(req, res) {
           <div class="statusitem"><span class="statuslabel">RASPBERRY PI</span><span id="trackerPiStatus" class="statusvalue warn">CHECKING</span></div>
           <div class="statusitem"><span class="statuslabel">TRACKER</span><span id="trackerProcessStatus" class="statusvalue warn">CHECKING</span></div>
           <div class="statusitem"><span class="statuslabel">CURRENT AIRCRAFT</span><span id="trackerAircraft" class="statusvalue">NONE</span></div>
+          <div class="statusitem"><span class="statuslabel">SERVER VERSION</span><span id="serverVersion" class="statusvalue">---</span></div>
+          <div class="statusitem"><span class="statuslabel">PI VERSION</span><span id="piVersion" class="statusvalue">---</span></div>
+          <div class="statusitem"><span class="statuslabel">VERSION MATCH</span><span id="versionMatch" class="statusvalue warn">UNKNOWN</span></div>
+          <div class="statusitem"><span class="statuslabel">BRIDGE HEALTH</span><span id="bridgeHealth" class="statusvalue warn">UNKNOWN</span></div>
+          <div class="statusitem"><span class="statuslabel">TRACKER HEALTH</span><span id="trackerHealth" class="statusvalue warn">UNKNOWN</span></div>
         </div>
         <button id="trackerButton" class="tracker-button" type="button" disabled>▶ START TRACKING</button>
         <p id="trackerDetail" class="tracker-detail" role="status" aria-live="polite">Checking Pi Bridge heartbeat…</p>
@@ -379,20 +384,14 @@ module.exports = async function handler(req, res) {
         <div>
           <span class="statuslabel">TRACKED AIRCRAFT</span><strong id="framingTarget">No aircraft</strong>
           <div class="framing-readouts">
-            <div><span class="statuslabel">YAW ADJUSTMENT</span><strong id="framingPan">+0.00°</strong></div>
-            <div><span class="statuslabel">PITCH ADJUSTMENT</span><strong id="framingTilt">+0.00°</strong></div>
-          </div>
-          <div class="framing-readouts">
-            <div><span class="statuslabel">SAVED YAW BORESIGHT</span><strong id="savedBoresightYaw">+0.00°</strong></div>
-            <div><span class="statuslabel">SAVED PITCH BORESIGHT</span><strong id="savedBoresightPitch">+0.00°</strong></div>
+            <div><span class="statuslabel">PAN CORRECTION</span><strong id="framingPan">+0.00°</strong></div>
+            <div><span class="statuslabel">TILT CORRECTION</span><strong id="framingTilt">+0.00°</strong></div>
           </div>
           <label for="framingSpeed">Adjustment speed </label>
           <select id="framingSpeed" class="framing-speed"><option value="fine">Fine</option><option value="normal">Normal</option></select>
           <p id="framingStatus" role="status" aria-live="polite">Not connected. The Pi joystick-enabled tracker must be running first.</p>
-          <button type="button" id="framingConnect" class="framing-button">START ADJUST</button>
-          <button type="button" id="framingSave" class="framing-button" disabled>SAVE ADJUST</button>
-          <button type="button" id="framingCancel" class="framing-button" disabled>CANCEL ADJUST</button>
-          <button type="button" id="framingReset" class="framing-button" hidden disabled>CENTRE TRIM</button>
+          <button type="button" id="framingConnect" class="framing-button">CONNECT JOYSTICK</button>
+          <button type="button" id="framingReset" class="framing-button" disabled>CENTRE TRIM</button>
           <button type="button" id="framingStop" class="framing-button framing-stop" disabled>REQUEST STOP</button>
           <p class="location-note">Corrections are gently rate-limited and bounded to ±5° for this run. Release retains the trim; CENTRE TRIM smoothly returns it to zero. AUTO tracking remains authoritative and Tower HOME is unchanged. Network STOP is not a substitute for the gimbal’s physical stop.</p>
         </div>

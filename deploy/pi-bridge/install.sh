@@ -138,6 +138,7 @@ else
     useradd --system --home-dir "$INSTALL_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
   fi
   install -d -m 0755 "$INSTALL_DIR" "$INSTALL_DIR/var" "$INSTALL_DIR/var/log"
+  install -d -m 0755 "$INSTALL_DIR/var/releases"
   if [[ "$SOURCE_DIR" != "$INSTALL_DIR" ]]; then
     cp -a "$SOURCE_DIR/." "$INSTALL_DIR/"
   fi
@@ -147,8 +148,11 @@ else
   fi
   chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
   install -m 0644 "$INSTALL_DIR/deploy/pi-bridge/mikeaircraft-pi-bridge.service" "/etc/systemd/system/$SERVICE_NAME"
+  install -m 0644 "$INSTALL_DIR/deploy/pi-bridge/mikeaircraft-release-agent.service" "/etc/systemd/system/mikeaircraft-release-agent.service"
+  install -m 0644 "$INSTALL_DIR/deploy/pi-bridge/mikeaircraft-release-agent.timer" "/etc/systemd/system/mikeaircraft-release-agent.timer"
   systemctl daemon-reload
   systemctl enable "$SERVICE_NAME" >/dev/null
+  systemctl enable --now mikeaircraft-release-agent.timer >/dev/null
   systemctl restart "$SERVICE_NAME"
 fi
 

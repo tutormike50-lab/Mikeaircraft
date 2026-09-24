@@ -4,6 +4,7 @@ const { DEFAULT_DESIRED, desiredState } = require("../lib/tracker-bridge-state")
 const { keys } = require("./tracker-control");
 const { keys: directKeys } = require("./direct-tracker");
 const { directState, DEFAULT_DIRECT } = require("../lib/direct-tracker-state");
+const { RELEASE_KEY } = require("./release-control");
 
 function tokenMatches(given, expected) {
   if (typeof given !== "string" || typeof expected !== "string") return false;
@@ -97,11 +98,15 @@ module.exports = async function handler(req, res) {
       rs4State: cleanText(body.rs4State, 80),
       fault: cleanText(body.fault, 300),
       telemetry: body.telemetry && typeof body.telemetry === "object" ? body.telemetry : null
+      ,release: body.release && typeof body.release === "object" ? body.release : null
+      ,bridgeHealth: body.bridgeHealth === "HEALTHY" ? "HEALTHY" : "FAULT"
+      ,trackerHealth: new Set(["HEALTHY", "IDLE", "FAULT"]).has(body.trackerHealth) ? body.trackerHealth : "FAULT"
     });
-    const [desired, , direct] = await redis.pipeline([
+    const [desired, , direct, approvedRelease] = await redis.pipeline([
       ["GET", keys.DESIRED_KEY],
       ["SET", keys.HEARTBEAT_KEY, heartbeat, "EX", "45"],
-      ["GET", directKeys.DIRECT_KEY]
+      ["GET", directKeys.DIRECT_KEY],
+      ["GET", RELEASE_KEY]
     ]);
     const normalState = desiredState(desired || DEFAULT_DESIRED);
     const directCommand = directState(direct || DEFAULT_DIRECT);
@@ -110,6 +115,8 @@ module.exports = async function handler(req, res) {
       ...normalState,
       direct: directCommand,
       control: effectiveControl(normalState, directCommand),
+      approvedRelease: approvedRelease ? JSON.parse(approvedRelease) : null,
+      serverVersion: process.env.VERCEL_GIT_COMMIT_SHA || null,
       receivedAt: new Date(receivedAt).toISOString()
     });
   } catch (error) {

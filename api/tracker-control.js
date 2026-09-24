@@ -1,17 +1,30 @@
 const { authorised } = require("../lib/control-auth");
 const { createRedisClient } = require("../lib/services/redis");
 const { DEFAULT_DESIRED, publicState } = require("../lib/tracker-bridge-state");
+const { RELEASE_KEY } = require("./release-control");
 
 const DESIRED_KEY = "mikeaircraft:tracker:desired:v1";
 const GENERATION_KEY = "mikeaircraft:tracker:generation:v1";
 const HEARTBEAT_KEY = "mikeaircraft:tracker:heartbeat:v1";
 
 async function readState(redis, now = Date.now()) {
-  const [desired, heartbeat] = await redis.pipeline([
+  const [desired, heartbeat, approvedValue] = await redis.pipeline([
     ["GET", DESIRED_KEY],
-    ["GET", HEARTBEAT_KEY]
+    ["GET", HEARTBEAT_KEY],
+    ["GET", RELEASE_KEY]
   ]);
-  return publicState(desired, heartbeat, now);
+  const state = publicState(desired, heartbeat, now);
+  let approved = null;
+  try { approved = approvedValue ? JSON.parse(approvedValue) : null; } catch { approved = null; }
+  const serverVersion = process.env.VERCEL_GIT_COMMIT_SHA || null;
+  const expected = approved?.manifest || null;
+  return {
+    ...state,
+    serverVersion,
+    approvedReleaseId: expected?.releaseId || null,
+    match: Boolean(state.piOnline && expected && state.piReleaseId === expected.releaseId &&
+      state.piVersion === expected.serverCommit && state.bridgeHealth === "HEALTHY")
+  };
 }
 
 module.exports = async function handler(req, res) {

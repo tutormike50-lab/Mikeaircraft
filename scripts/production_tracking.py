@@ -6,7 +6,6 @@ continuous target and fail-safe behaviour deterministic offline.
 """
 
 from dataclasses import asdict, dataclass
-from dataclasses import replace
 import math
 from typing import Optional
 
@@ -100,19 +99,6 @@ class GeometryTarget:
 
     def as_dict(self):
         return asdict(self)
-
-
-def boresight_corrected_target(target, yaw_deg, pitch_deg):
-    """Apply camera-to-gimbal constants only at the final pointing boundary."""
-    # Preserve the ec9b423 path exactly while centering is inactive.
-    if yaw_deg == 0.0 and pitch_deg == 0.0:
-        return target
-    if target.status == "HOME" or target.target_yaw_relative_deg is None:
-        return target
-    return replace(target,
-                   target_yaw_relative_deg=wrap180(target.target_yaw_relative_deg + yaw_deg),
-                   target_pitch_relative_deg=(None if target.target_pitch_relative_deg is None
-                                              else target.target_pitch_relative_deg + pitch_deg))
 
 
 @dataclass

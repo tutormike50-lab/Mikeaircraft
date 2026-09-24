@@ -9,7 +9,6 @@ function beat(s, values = {}, now = 1100) {
     applied: s.applied, ...values }, now);
 }
 function trim(s, values = {}, now = 1200) {
-  if (!s.adjusting) s = go(s, { action: 'start-adjust', sessionId }, now - 1);
   return go(s, { action: 'trim', sessionId, expectedRevision: s.revision,
     validUntil: 2200, requestId: 'request-1234567890', pan: 0.2, tilt: -0.1, ...values }, now);
 }
@@ -84,23 +83,6 @@ test('no transition touches HOME or broadcast settings', () => {
   const s = trim(beat(initial()), { home_yaw: 99, airport: 'LHR' });
   assert.equal(s.home_yaw, undefined); assert.equal(s.airport, undefined);
 });
-test('START captures baseline; SAVE rebases seamlessly; CANCEL preserves saved values', () => {
-  const saved = { yawDeg: 1.25, pitchDeg: -0.5 };
-  let s = go(beat(initial()), { action: 'start-adjust', sessionId }, 1150, saved);
-  assert.deepEqual(s.baseline, saved); assert.deepEqual(s.applied, { revision: 0, pan: 0, tilt: 0 });
-  s = trim(s, { pan: 0.2, tilt: -0.1 }, 1200);
-  s = beat(s, { applied: { revision: 1, pan: 0.2, tilt: -0.1 } }, 1250);
-  const before = [saved.yawDeg + s.applied.pan, saved.pitchDeg + s.applied.tilt];
-  s = go(s, { action: 'save-adjust', sessionId }, 1300, saved);
-  assert.deepEqual([s.saveBoresight.yawDeg, s.saveBoresight.pitchDeg], before);
-  assert.deepEqual(s.applied, { revision: 1, pan: 0.2, tilt: -0.1 });
-  assert.deepEqual({ revision: s.command.revision, pan: s.command.pan, tilt: s.command.tilt },
-                   { revision: 2, pan: 0, tilt: 0 });
-  let cancel = go(beat(initial()), { action: 'start-adjust', sessionId }, 1150, saved);
-  cancel = go(cancel, { action: 'cancel-adjust', sessionId }, 1200, saved);
-  assert.equal(cancel.saveBoresight, undefined); assert.deepEqual(saved, { yawDeg: 1.25, pitchDeg: -0.5 });
-});
-
 // Handler tests mock Redis only: no deployment credentials or network.
 const handler = require('../api/gimbal-control');
 function response() { return { code: 200, setHeader() {}, status(c) { this.code = c; return this; }, json(v) { this.body = v; return this; } }; }
@@ -130,17 +112,17 @@ test('trusted-browser cookie authenticates without exposing the PIN to control A
     assert.equal(check.code, 200); assert.equal(check.body.ok, true);
   } finally { if (old === undefined) delete process.env.MIKEAIRCRAFT_CONTROL_PIN; else process.env.MIKEAIRCRAFT_CONTROL_PIN = old; }
 });
-test('handler uses atomic compare-and-set across session and settings keys', async () => {
+test('handler uses atomic compare-and-set with no changes to the settings key', async () => {
   const prior = { pin: process.env.MIKEAIRCRAFT_CONTROL_PIN, url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN, fetch: global.fetch };
   process.env.MIKEAIRCRAFT_CONTROL_PIN = 'unit-test-only';
   process.env.KV_REST_API_URL = 'https://fake.invalid'; process.env.KV_REST_API_TOKEN = 'fake';
-  let raw = null, settings = JSON.stringify({ cameraLocation: { boresight: { yawDeg: 0, pitchDeg: 0 } } }), collisions = 1;
+  let raw = null, collisions = 1;
   global.fetch = async (_, options) => {
     const args = JSON.parse(options.body); let result;
-    if (args[0] === 'MGET') { assert.deepEqual(args.slice(1), ['mikeaircraft:gimbal:framing:v1', 'mikeaircraft:control:settings']); result = [raw, settings]; }
-    else { assert.equal(args[0], 'EVAL'); assert.equal(args[3], 'mikeaircraft:gimbal:framing:v1'); assert.equal(args[4], 'mikeaircraft:control:settings');
+    if (args[0] === 'GET') { assert.equal(args[1], 'mikeaircraft:gimbal:framing:v1'); result = raw; }
+    else { assert.equal(args[0], 'EVAL'); assert.equal(args[3], 'mikeaircraft:gimbal:framing:v1');
       if (collisions-- > 0) result = 0;
-      else { assert.equal(args[5], raw || ''); raw = args[6]; result = 1; }
+      else { assert.equal(args[4], raw || ''); raw = args[5]; result = 1; }
     }
     return { ok: true, json: async () => ({ result }) };
   };

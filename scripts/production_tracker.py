@@ -22,8 +22,7 @@ import time
 import traceback
 import urllib.request
 
-from production_tracking import AircraftObservation, CameraReference, ControllerV1, GeometryTargetSource, boresight_corrected_target, wrap180
-from control_panel_trim import PanelTrim
+from production_tracking import AircraftObservation, CameraReference, ControllerV1, GeometryTargetSource, wrap180
 from camera_optics import angular_tolerance_deg, camera_optics, normalized_frame_offset
 
 
@@ -411,7 +410,6 @@ async def run(args):
     selected_id = None
     bluetooth_state = "DISCONNECTED"
     diagnostics = Diagnostics(args.log)
-    panel = PanelTrim(args.panel_url, args.pin)
     adsb_intake = AdsbObservationIntake()
     intentional_disconnect = False
     disconnected_at = None
@@ -579,7 +577,6 @@ async def run(args):
             await asyncio.sleep(2.0)
 
     try:
-        panel.start()
         await connect()
         responder = asyncio.create_task(service_protocol_requests())
         poller = asyncio.create_task(poll_aircraft())
@@ -619,16 +616,11 @@ async def run(args):
             relative_yaw = wrap180(measured_yaw - home_yaw)
             relative_pitch = -wrap180(measured_pitch - home_pitch)
             controller.correct_telemetry(relative_yaw, relative_pitch)
-            mode = 'TRACKING' if target.aircraft_id and target.status in ('VALID', 'PREDICTED') else ('RETURNING' if target.status == 'HOME' else 'WAITING')
-            panel.update(mode, target.aircraft_id or '', mode == 'TRACKING',
-                         999 if telemetry_at is None else tick - telemetry_at, 0)
-            boresight_yaw, boresight_pitch = panel.correction()
-            corrected_target = boresight_corrected_target(target, boresight_yaw, boresight_pitch)
-            output = controller.step(corrected_target, tick - last_tick)
+            output = controller.step(target, tick - last_tick)
             last_tick = tick
             await send_axes(output.tilt_command * RS4_PITCH_SIGN,
                             output.pan_command * RS4_YAW_SIGN)
-            diagnostics.write(corrected_target, output, {
+            diagnostics.write(target, output, {
                 "estimated_yaw": controller.estimated_yaw_deg,
                 "estimated_pitch": controller.estimated_pitch_deg,
                 "measured_yaw": relative_yaw, "measured_pitch": relative_pitch,
@@ -641,7 +633,6 @@ async def run(args):
             }, bluetooth_state, optics)
             await asyncio.sleep(max(0.0, CONTROL_PERIOD_S - (time.monotonic() - tick)))
     finally:
-        panel.close()
         # Cleanup is deliberately best-effort and may never replace the first fault.
         if 'poller' in locals():
             poller.cancel()
@@ -674,7 +665,6 @@ def main(argv=None):
     parser.add_argument("--camera-optics-url", default=CAMERA_OPTICS_URL)
     parser.add_argument("--direct", action="store_true", help="use only the explicit Direct Tracker ICAO command")
     parser.add_argument("--direct-tracker-url", default=DIRECT_TRACKER_URL)
-    parser.add_argument("--panel-url", default="https://mikeaircraft.vercel.app")
     parser.add_argument("--effective-latency", type=configured_effective_latency_s,
                         default=configured_effective_latency_s(),
                         help="downstream aim latency in seconds (persistent env: MIKEAIRCRAFT_EFFECTIVE_LATENCY_S)")

@@ -12,6 +12,9 @@ import hashlib
 import urllib.error
 import urllib.request
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from release_manager import ReleaseManager
+
 POLL_SECONDS = 2.0
 STOP_TIMEOUT_SECONDS = 12.0
 
@@ -79,21 +82,38 @@ class PiBridge:
         self.attempted_generation = None
         self.process_mode = None
         self.telemetry = None
+        self.release_manager = ReleaseManager(self.repo_dir)
+        self.health_path = self.repo_dir / "var" / "releases" / "bridge-health.json"
 
     def heartbeat(self):
         self.refresh_process()
+        release = self.release_manager.installed()
+        pending = self.release_manager._read_pending()
+        reported_release = release or (pending and {"releaseId": pending.get("releaseId"),
+                                                     "serverCommit": pending.get("serverCommit"),
+                                                     "candidate": True})
+        tracker_health = "FAULT" if self.tracker_state == "FAULT" else ("IDLE" if self.tracker_state == "STOPPED" else "HEALTHY")
         payload = json.dumps({"trackerState": self.tracker_state,
                               "currentAircraft": self.current_aircraft,
                               "rs4State": self.rs4_state,
                               "fault": self.fault,
-                              "telemetry": self.telemetry}).encode("utf-8")
+                              "telemetry": self.telemetry,
+                              "release": reported_release,
+                              "bridgeHealth": "HEALTHY",
+                              "trackerHealth": tracker_health}).encode("utf-8")
         request = urllib.request.Request(
             self.endpoint, data=payload, method="POST",
             headers={"Authorization": "Bearer " + self.token,
                      "Content-Type": "application/json",
                      "User-Agent": "MikeAircraft-Pi-Bridge/1"})
         with self.opener(request, timeout=10) as response:
-            return json.loads(response.read().decode("utf-8"))
+            result = json.loads(response.read().decode("utf-8"))
+        self.health_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.health_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"reportedAt": int(self.now()), "release": reported_release,
+                                         "bridgeHealth": "HEALTHY", "trackerHealth": tracker_health}) + "\n", encoding="utf-8")
+        os.replace(temporary, self.health_path)
+        return result
 
     def start(self, generation, direct=False):
         mode = "DIRECT" if direct else "PRODUCTION"

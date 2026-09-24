@@ -1,0 +1,17 @@
+[Unit]
+Description=MikeAircraft allowlisted release installer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/mikeaircraft/pi-bridge.env
+WorkingDirectory=/opt/mikeaircraft
+ExecStart=/usr/bin/python3 /opt/mikeaircraft/scripts/release_agent.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/mikeaircraft
+

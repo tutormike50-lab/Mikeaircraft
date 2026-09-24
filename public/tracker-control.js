@@ -5,6 +5,11 @@
   const processStatus = document.getElementById("trackerProcessStatus");
   const aircraft = document.getElementById("trackerAircraft");
   const detail = document.getElementById("trackerDetail");
+  const serverVersion = document.getElementById("serverVersion");
+  const piVersion = document.getElementById("piVersion");
+  const versionMatch = document.getElementById("versionMatch");
+  const bridgeHealth = document.getElementById("bridgeHealth");
+  const trackerHealth = document.getElementById("trackerHealth");
   if (!button || !piStatus || !processStatus || !aircraft || !detail) return;
 
   let state = null;
@@ -21,6 +26,11 @@
     processStatus.className = "statusvalue " + (tracker === "TRACKING" ? "good" : tracker === "FAULT" ? "bad" : tracker === "STARTING" ? "warn" : "");
     aircraft.textContent = next.currentAircraft || "NONE";
     aircraft.className = "statusvalue " + (next.currentAircraft ? "good" : "");
+    if (serverVersion) serverVersion.textContent = next.serverVersion ? next.serverVersion.slice(0, 7) : "UNKNOWN";
+    if (piVersion) piVersion.textContent = next.piVersion ? next.piVersion.slice(0, 7) : "UNKNOWN";
+    if (versionMatch) { versionMatch.textContent = next.match ? "YES" : "NO"; versionMatch.className = "statusvalue " + (next.match ? "good" : "bad"); }
+    if (bridgeHealth) { bridgeHealth.textContent = next.bridgeHealth || "FAULT"; bridgeHealth.className = "statusvalue " + (next.bridgeHealth === "HEALTHY" ? "good" : "bad"); }
+    if (trackerHealth) { trackerHealth.textContent = next.trackerHealth || "FAULT"; trackerHealth.className = "statusvalue " + (next.trackerHealth === "HEALTHY" || next.trackerHealth === "IDLE" ? "good" : "bad"); }
     button.className = "tracker-button";
     if (active && tracker === "STARTING") {
       button.textContent = "STARTING…";
