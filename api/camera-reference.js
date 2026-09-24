@@ -1,4 +1,5 @@
-const crypto = require("crypto");
+const { authorised } = require("../lib/control-auth");
+const { normaliseStoredSettings } = require("./settings");
 
 const SETTINGS_KEY = "mikeaircraft:control:settings";
 
@@ -9,18 +10,11 @@ function credentials() {
   };
 }
 
-function pinMatches(supplied, expected) {
-  const left = Buffer.from(String(supplied || ""));
-  const right = Buffer.from(String(expected || ""));
-  return left.length === right.length && crypto.timingSafeEqual(left, right);
-}
-
 module.exports = async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Method not allowed" });
-  const expected = String(process.env.MIKEAIRCRAFT_CONTROL_PIN || "");
-  if (!expected || !pinMatches(req.headers?.["x-mikeaircraft-control-pin"], expected)) {
+  if (!authorised(req)) {
     return res.status(401).json({ ok: false, error: "Incorrect control PIN" });
   }
   const auth = credentials();
@@ -32,9 +26,10 @@ module.exports = async function handler(req, res) {
       body: JSON.stringify(["GET", SETTINGS_KEY])
     });
     const payload = await response.json();
-    const settings = typeof payload.result === "string" ? JSON.parse(payload.result) : payload.result;
-    const cameraReference = settings?.cameraLocation || null;
-    if (!cameraReference?.orientation) {
+    if (payload && payload.error) throw new Error(String(payload.error));
+    const settings = normaliseStoredSettings(payload?.result);
+    const cameraReference = settings.cameraLocation;
+    if (!cameraReference?.readiness?.complete) {
       return res.status(409).json({ ok: false, error: "Complete CameraReference is not calibrated" });
     }
     return res.status(200).json({ ok: true, cameraReference });

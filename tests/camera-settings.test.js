@@ -1,6 +1,31 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { normaliseCameraLocation, normaliseStoredSettings } = require("../api/settings");
+const settingsHandler = require("../api/settings");
+const cameraReferenceHandler = require("../api/camera-reference");
+const { sessionCookie } = require("../lib/control-auth");
+const { normaliseCameraLocation, normaliseStoredSettings } = settingsHandler;
+
+function responseCapture() {
+  return {
+    statusCode: 200, body: null,
+    setHeader() {}, status(code) { this.statusCode = code; return this; },
+    json(value) { this.body = value; return this; }, end() { return this; }
+  };
+}
+
+function completeLocation(overrides = {}) {
+  return {
+    lat: 50, lon: 14, accuracyM: 6,
+    calibrationStartedAt: "2026-09-23T10:00:00Z",
+    calibrationCompletedAt: "2026-09-23T10:01:30Z",
+    orientation: {
+      homeTrueAzimuthDeg: 243.2, homeElevationDeg: 3.4,
+      headingSpreadDeg: 2, elevationSpreadDeg: 1, sampleCount: 20,
+      calibratedAt: "2026-09-23T10:01:30Z"
+    },
+    ...overrides
+  };
+}
 
 test("normalises and preserves multi-fix CameraReference provenance", () => {
   const value = normaliseCameraLocation({
@@ -48,4 +73,67 @@ test("persists stable HOME orientation provenance and fixed offsets", () => {
     orientation: { homeTrueAzimuthDeg: 243.24, homeElevationDeg: 3.44, headingOffsetDeg: 1.5, elevationOffsetDeg: -0.5, headingSpreadDeg: 2, elevationSpreadDeg: 1, sampleCount: 20 }
   });
   assert.deepEqual(value.orientation, { homeTrueAzimuthDeg: 243.2, homeElevationDeg: 3.4, headingOffsetDeg: 1.5, elevationOffsetDeg: -0.5, headingSpreadDeg: 2, elevationSpreadDeg: 1, sampleCount: 20, source: "IPHONE_DEVICE_ORIENTATION", quality: "STABLE", calibratedAt: value.orientation.calibratedAt });
+  assert.deepEqual(value.readiness, { position: true, heading: true, elevation: true, complete: true });
+});
+
+test("incomplete calibration cannot replace the previous complete CameraReference", async () => {
+  const previous = JSON.stringify({ cameraLocation: completeLocation() });
+  const prior = { pin: process.env.MIKEAIRCRAFT_CONTROL_PIN, url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN, fetch: global.fetch };
+  process.env.MIKEAIRCRAFT_CONTROL_PIN = "1234";
+  process.env.KV_REST_API_URL = "https://redis.test";
+  process.env.KV_REST_API_TOKEN = "token";
+  const commands = [];
+  global.fetch = async (_, options) => {
+    const command = JSON.parse(options.body); commands.push(command);
+    return { ok: true, json: async () => ({ result: command[0] === "GET" ? previous : "OK" }) };
+  };
+  try {
+    const res = responseCapture();
+    await settingsHandler({ method: "POST", headers: { "x-mikeaircraft-control-pin": "1234" }, body: { cameraLocation: { lat: 51, lon: 15, accuracyM: 4 } } }, res);
+    assert.equal(res.statusCode, 409);
+    assert.match(res.body.error, /previous calibration was preserved/);
+    assert.deepEqual(commands.map(command => command[0]), ["GET"]);
+  }
+  finally {
+    process.env.MIKEAIRCRAFT_CONTROL_PIN = prior.pin;
+    process.env.KV_REST_API_URL = prior.url;
+    process.env.KV_REST_API_TOKEN = prior.token;
+    global.fetch = prior.fetch;
+  }
+});
+
+test("complete calibration is committed and restored with readiness metadata", async () => {
+  const previous = JSON.stringify({ cameraLocation: completeLocation() });
+  const next = completeLocation({ lat: 51, lon: 15 });
+  const prior = { pin: process.env.MIKEAIRCRAFT_CONTROL_PIN, url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN, fetch: global.fetch };
+  process.env.MIKEAIRCRAFT_CONTROL_PIN = "1234";
+  process.env.KV_REST_API_URL = "https://redis.test";
+  process.env.KV_REST_API_TOKEN = "token";
+  let stored = previous;
+  global.fetch = async (_, options) => {
+    const command = JSON.parse(options.body);
+    if (command[0] === "SET") { stored = command[2]; return { ok: true, json: async () => ({ result: "OK" }) }; }
+    return { ok: true, json: async () => ({ result: stored }) };
+  };
+  try {
+    const save = responseCapture();
+    await settingsHandler({ method: "POST", headers: { "x-mikeaircraft-control-pin": "1234" }, body: { cameraLocation: next } }, save);
+    assert.equal(save.statusCode, 200);
+    assert.deepEqual(save.body.cameraReference.readiness, { position: true, heading: true, elevation: true, complete: true });
+    assert.equal(save.body.cameraReference.orientation.homeTrueAzimuthDeg, 243.2);
+
+    const reload = responseCapture();
+    const cookie = sessionCookie("1234").split(";")[0];
+    await cameraReferenceHandler({ method: "GET", headers: { cookie } }, reload);
+    assert.equal(reload.statusCode, 200);
+    assert.equal(reload.body.cameraReference.lat, 51);
+    assert.equal(reload.body.cameraReference.readiness.complete, true);
+    assert.equal(reload.body.cameraReference.orientation.homeElevationDeg, 3.4);
+  }
+  finally {
+    process.env.MIKEAIRCRAFT_CONTROL_PIN = prior.pin;
+    process.env.KV_REST_API_URL = prior.url;
+    process.env.KV_REST_API_TOKEN = prior.token;
+    global.fetch = prior.fetch;
+  }
 });

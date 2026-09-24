@@ -437,6 +437,7 @@ module.exports = async function handler(req, res) {
     let locationTimer = null;
     let calibrationSession = null;
     let orientationSession = null;
+    let persistedCameraReference = null;
     let orientationListener = null;
     let orientationReason = "Orientation has not been requested.";
 
@@ -519,7 +520,7 @@ module.exports = async function handler(req, res) {
     }
 
     function setLocationStatus(configured, updatedAt) {
-      cameraLocationStatus.textContent = configured ? "SAVED" : "NOT SET";
+      cameraLocationStatus.textContent = configured ? "POSITION READY" : "NOT SET";
       cameraLocationStatus.className = "location-value " + (configured ? "good" : "warn");
       cameraLocationStatus.title = configured && updatedAt
         ? "Saved " + new Date(updatedAt).toLocaleString()
@@ -616,6 +617,24 @@ module.exports = async function handler(req, res) {
         cameraLocationStatus.textContent = "UNKNOWN";
         cameraLocationStatus.className = "location-value bad";
         setMessage(error.message, "bad");
+      }
+    }
+
+    async function loadCameraReference() {
+      if (!sessionUnlocked) return;
+      try {
+        const response = await fetch("/api/camera-reference?t=" + Date.now(), { cache: "no-store" });
+        const data = await response.json();
+        if (response.status === 401) forgetPin();
+        if (!response.ok || !data.ok) throw new Error(data.error || "CameraReference request failed");
+        persistedCameraReference = data.cameraReference;
+        setLocationStatus(true, persistedCameraReference.updatedAt);
+        renderOrientation();
+      }
+      catch (error) {
+        if (error.message !== "Complete CameraReference is not calibrated") {
+          headingStatus.title = elevationStatus.title = error.message;
+        }
       }
     }
 
@@ -743,7 +762,11 @@ module.exports = async function handler(req, res) {
     }
 
     function renderOrientation() {
-      const snapshot = orientationSession ? orientationSession.snapshot() : { ready: false, reason: orientationReason };
+      const saved = persistedCameraReference?.orientation;
+      const snapshot = orientationSession
+        ? orientationSession.snapshot()
+        : saved ? { ...saved, ready: Boolean(persistedCameraReference?.readiness?.complete) }
+          : { ready: false, reason: orientationReason };
       headingStatus.textContent = snapshot.ready ? snapshot.homeTrueAzimuthDeg.toFixed(1) + "° TRUE" : "NOT READY";
       elevationStatus.textContent = snapshot.ready ? (snapshot.homeElevationDeg >= 0 ? "+" : "") + snapshot.homeElevationDeg.toFixed(1) + "°" : "NOT READY";
       headingStatus.className = "location-value " + (snapshot.ready ? "good" : "warn");
@@ -780,6 +803,9 @@ module.exports = async function handler(req, res) {
       const orientation = renderOrientation();
 
       try {
+        if (!orientation.ready) {
+          throw new Error("Heading and elevation must both be ready before CameraReference can be saved");
+        }
         const response = await fetch("/api/settings", {
           method: "POST",
           cache: "no-store",
@@ -827,6 +853,10 @@ module.exports = async function handler(req, res) {
           throw new Error(data.error || "Camera location save failed");
         }
 
+        persistedCameraReference = data.cameraReference;
+        orientationSession = null;
+        renderOrientation();
+
         const accuracy = Number(data.cameraLocation?.accuracyM);
         const accuracyText = Number.isFinite(accuracy) ? " ±" + Math.round(accuracy) + "m" : "";
         cameraLocationStatus.textContent = "POSITION CALIBRATED" + accuracyText;
@@ -853,7 +883,17 @@ module.exports = async function handler(req, res) {
     function completeCalibration(force) {
       if (!locationBusy || !calibrationSession) return;
       const snapshot = calibrationSession.snapshot();
+      const orientation = renderOrientation();
       renderCalibration(snapshot);
+      if (snapshot.acceptanceMet && !orientation.ready) {
+        if (!force) return;
+        stopLocationWatch();
+        locationBusy = false;
+        resetLocationButton.disabled = false;
+        resetLocationButton.textContent = "TRY AUTO CALIBRATE AGAIN";
+        setLocationMessage("HEADING AND ELEVATION NOT READY. The previous complete CameraReference was preserved.", "bad");
+        return;
+      }
       if (!snapshot.acceptanceMet || !snapshot.estimate) {
         if (!force) return;
         stopLocationWatch();
@@ -963,8 +1003,11 @@ module.exports = async function handler(req, res) {
     stabilisationMode.addEventListener("change", () => { renderCameraOptics({ slider_position_0_1: cameraZoom.value, stabilisation_mode: stabilisationMode.value }); saveCameraOptics(); });
     setInterval(renderPriority, 1000);
 
-    loadAuthentication();
-    loadSettings();
+    async function initialise() {
+      await loadAuthentication();
+      await Promise.all([loadSettings(), loadCameraReference()]);
+    }
+    initialise();
   </script>
   <script src="/tracker-control.js" defer></script>
   <script src="/control-joystick.js" defer></script>

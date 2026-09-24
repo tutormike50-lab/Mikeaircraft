@@ -109,6 +109,12 @@ function normaliseCameraLocation(value) {
       quality: "STABLE",
       calibratedAt: Number.isFinite(Date.parse(orientation.calibratedAt || "")) ? new Date(orientation.calibratedAt).toISOString() : new Date().toISOString()
     } : null,
+    readiness: {
+      position: true,
+      heading: validOrientation,
+      elevation: validOrientation,
+      complete: validOrientation
+    },
     l80Evidence: { status: "NOT_INTEGRATED", device: "/dev/ttyUSB0", position: null, separationM: null, checkedAt: null },
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString()
   };
@@ -361,8 +367,11 @@ module.exports = async function handler(req, res) {
       // The write below is the authoritative Redis availability check.
     }
 
-    if (hasCameraLocation && !requestedCameraLocation.orientation && current.cameraLocation?.orientation) {
-      requestedCameraLocation = { ...requestedCameraLocation, orientation: current.cameraLocation.orientation };
+    if (hasCameraLocation && !requestedCameraLocation.orientation) {
+      return res.status(409).json({
+        ok: false,
+        error: "Complete CameraReference is not calibrated; previous calibration was preserved"
+      });
     }
 
     const settings = {
@@ -398,7 +407,8 @@ module.exports = async function handler(req, res) {
             altitudeAvailable: settings.cameraLocation.altitudeM !== null,
             updatedAt: settings.cameraLocation.updatedAt
           }
-        : undefined
+        : undefined,
+      cameraReference: hasCameraLocation ? settings.cameraLocation : undefined
     });
   }
   catch (error) {

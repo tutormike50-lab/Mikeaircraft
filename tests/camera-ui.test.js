@@ -21,6 +21,11 @@ test("control panel exposes crosshair workflow and continuous fresh geolocation"
   assert.match(html, /CameraOrientationCalibration\.requestPermission\(window\)/);
   assert.match(html, /HEADING/);
   assert.match(html, /ELEVATION/);
+  assert.match(html, /snapshot\.acceptanceMet && !orientation\.ready/);
+  assert.match(html, /previous complete CameraReference was preserved/);
+  assert.match(html, /fetch\("\/api\/camera-reference\?t="/);
+  assert.match(html, /persistedCameraReference = data\.cameraReference/);
+  assert.match(html, /POSITION READY/);
   assert.doesNotMatch(html, /fewer than 20 fresh fixes/);
   assert.doesNotMatch(html, /getCurrentPosition\(/);
 });
