@@ -59,6 +59,13 @@ class ProductionTrackingTests(unittest.TestCase):
         output = controller.step(invalid, 0.05)
         self.assertEqual((output.state, output.pan_command, output.tilt_command), ("FAULT", 0, 0))
 
+    def test_polling_cannot_reset_stale_source_age(self):
+        self.assertTrue(self.source.update(self.observation))
+        for offset in (200, 400, 1000, 3000, 5000):
+            self.assertFalse(self.source.update(self.observation))
+            self.assertEqual(self.source.latest(self.t0 + offset).source_age_ms, offset)
+        self.assertEqual(self.source.latest(self.t0 + 5001).status, "STALE")
+
     def test_controller_consumes_geometry_rate_and_reacquires_on_id_change(self):
         self.source.update(self.observation)
         controller = ControllerV1(capture_cycles=2)

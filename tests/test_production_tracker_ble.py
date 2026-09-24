@@ -8,10 +8,11 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from production_tracker import (BleLifecycleError, DjiFrameDecoder, client_connected,
+from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, client_connected,
                                 configured_effective_latency_s, effective_write_hz, make_disconnect_callback,
                                 observation_from_adsb, prepare_rs4_gatt,
                                 rs4_protocol_response)  # noqa: E402
+from production_tracking import CameraReference, GeometryTargetSource  # noqa: E402
 
 
 class FakeTx:
@@ -34,16 +35,83 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
 
     def test_only_geometric_altitude_enables_vertical_tracking(self):
         geometric = observation_from_adsb(
-            {"lat": 50.0, "lon": 14.0, "alt_geom": 4000, "alt_baro": 3900},
-            "abc123", 2_000_000)
+            {"lat": 50.0, "lon": 14.0, "seen_pos": 0.5,
+             "alt_geom": 4000, "alt_baro": 3900},
+            "abc123", 2000.0, 2_000_000)
         self.assertEqual(geometric.altitude_source, "ADS_B_GEOMETRIC")
         self.assertAlmostEqual(geometric.altitude_ellipsoid_m, 1219.2)
         barometric = observation_from_adsb(
-            {"lat": 50.0, "lon": 14.0, "alt_baro": 3900},
-            "abc123", 2_000_000)
+            {"lat": 50.0, "lon": 14.0, "seen_pos": 0.5, "alt_baro": 3900},
+            "abc123", 2000.0, 2_000_000)
         self.assertEqual(barometric.altitude_source,
                          "UNAVAILABLE_BAROMETRIC_NOT_SUBSTITUTED")
         self.assertIsNone(barometric.altitude_ellipsoid_m)
+
+    def test_frozen_source_keeps_identity_and_age_without_new_measurement(self):
+        intake = AdsbObservationIntake()
+        aircraft = {"hex": "abc123", "lat": 50.0, "lon": 14.0,
+                    "seen_pos": 0.2, "gs": 200, "track": 90}
+        first = intake.ingest({"now": 2000.0}, aircraft, "abc123", 2_000_000)
+        source = GeometryTargetSource(
+            CameraReference(50.1, 14.1, 300.0, 0.0, 0.0, 1), stale_age_s=5.0)
+        self.assertTrue(source.update(first.observation))
+        frozen = dict(aircraft, seen_pos=1.2)
+        second = intake.ingest({"now": 2001.0}, frozen, "abc123", 2_001_000)
+
+        self.assertEqual(first.observation.timestamp_ms, 1_999_800)
+        self.assertEqual(first.diagnostics["source_update_identity"],
+                         second.diagnostics["source_update_identity"])
+        self.assertTrue(second.duplicate)
+        self.assertIsNone(second.observation)
+        self.assertEqual(second.diagnostics["source_age_ms"], 1200)
+        self.assertEqual(source.latest(2_004_800).source_age_ms, 5000)
+        self.assertEqual(source.latest(2_004_801).status, "STALE")
+
+    def test_genuine_new_source_position_is_accepted_once(self):
+        intake = AdsbObservationIntake()
+        first = intake.ingest({"now": 2000.0},
+                              {"lat": 50.0, "lon": 14.0, "seen_pos": 0.2},
+                              "abc123", 2_000_000)
+        newer = intake.ingest({"now": 2001.0},
+                              {"lat": 50.001, "lon": 14.001, "seen_pos": 0.1},
+                              "abc123", 2_001_000)
+        repeat = intake.ingest({"now": 2001.0},
+                               {"lat": 50.001, "lon": 14.001, "seen_pos": 0.1},
+                               "abc123", 2_001_200)
+
+        self.assertFalse(first.duplicate)
+        source = GeometryTargetSource(
+            CameraReference(50.1, 14.1, 300.0, 0.0, 0.0, 1))
+        self.assertTrue(source.update(first.observation))
+        self.assertTrue(source.update(newer.observation))
+        self.assertEqual(newer.observation.timestamp_ms, 2_000_900)
+        self.assertNotEqual(first.diagnostics["source_update_identity"],
+                            newer.diagnostics["source_update_identity"])
+        self.assertTrue(repeat.duplicate)
+        self.assertIsNone(repeat.observation)
+
+    def test_invalid_future_missing_and_backward_source_timing_is_explicit(self):
+        cases = [
+            ({}, {"lat": 50.0, "lon": 14.0, "seen_pos": 0.1}),
+            ({"now": 2000.0}, {"lat": 50.0, "lon": 14.0}),
+            ({"now": 2000.0}, {"lat": 50.0, "lon": 14.0, "seen_pos": -1}),
+            ({"now": 2010.0}, {"lat": 50.0, "lon": 14.0, "seen_pos": 0.0}),
+        ]
+        for feed, aircraft in cases:
+            result = AdsbObservationIntake().ingest(feed, aircraft, "abc123", 2_000_000)
+            self.assertEqual(result.diagnostics["timing_status"], "INVALID")
+            self.assertIsNone(result.observation)
+            self.assertIn("timing_error", result.diagnostics)
+
+        intake = AdsbObservationIntake()
+        self.assertIsNotNone(intake.ingest(
+            {"now": 2000.0}, {"lat": 50.0, "lon": 14.0, "seen_pos": 0.1},
+            "abc123", 2_000_000).observation)
+        backward = intake.ingest(
+            {"now": 1998.0}, {"lat": 50.1, "lon": 14.1, "seen_pos": 0.1},
+            "abc123", 2_001_000)
+        self.assertEqual(backward.diagnostics["timing_status"], "INVALID")
+        self.assertIn("backward", backward.diagnostics["timing_error"])
 
     def test_captured_rs4_requests_produce_exact_official_app_responses(self):
         captures = [

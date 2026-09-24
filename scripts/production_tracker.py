@@ -10,7 +10,9 @@ modified.
 import argparse
 import asyncio
 import contextlib
+from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 import os
@@ -173,12 +175,26 @@ def current_selection(engine):
             "status": str(current.get("state") or "CURRENT").strip().upper()}
 
 
-def observation_from_adsb(aircraft, aircraft_id, received_ms):
+@dataclass(frozen=True)
+class AdsbIntakeResult:
+    observation: object
+    diagnostics: dict
+    duplicate: bool
+
+
+def observation_from_adsb(aircraft, aircraft_id, source_snapshot_s, local_read_ms):
+    """Build one observation using dump1090's epoch-seconds source clock."""
     lat, lon = aircraft.get("lat"), aircraft.get("lon")
     if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
-        return None
+        raise ValueError("position latitude/longitude missing or non-numeric")
     seen_pos = aircraft.get("seen_pos")
-    timestamp_ms = received_ms - round(float(seen_pos or 0) * 1000)
+    if not isinstance(source_snapshot_s, (int, float)) or not math.isfinite(source_snapshot_s):
+        raise ValueError("dump1090 snapshot now missing, non-numeric, or non-finite")
+    if not isinstance(seen_pos, (int, float)) or not math.isfinite(seen_pos) or seen_pos < 0:
+        raise ValueError("dump1090 seen_pos missing, negative, non-numeric, or non-finite")
+    timestamp_ms = round((float(source_snapshot_s) - float(seen_pos)) * 1000)
+    if timestamp_ms > local_read_ms + 2000:
+        raise ValueError("derived source observation time is materially in the future")
     altitude = aircraft.get("alt_geom")
     altitude_source = "ADS_B_GEOMETRIC"
     if not isinstance(altitude, (int, float)):
@@ -195,6 +211,80 @@ def observation_from_adsb(aircraft, aircraft_id, received_ms):
                                float(track) if isinstance(track, (int, float)) else None,
                                float(vertical_rate) if vertical_rate is not None else None,
                                altitude_source=altitude_source)
+
+
+class AdsbObservationIntake:
+    """Validate, identify, and de-duplicate source position updates."""
+
+    def __init__(self):
+        self.aircraft_id = None
+        self.last_snapshot_ms = None
+        self.last_observation_ms = None
+        self.last_update_identity = None
+
+    def select_aircraft(self, aircraft_id):
+        if aircraft_id != self.aircraft_id:
+            self.aircraft_id = aircraft_id
+            self.last_snapshot_ms = None
+            self.last_observation_ms = None
+            self.last_update_identity = None
+
+    @staticmethod
+    def _identity(observation):
+        payload = [observation.aircraft_id, observation.timestamp_ms,
+                   observation.latitude_deg, observation.longitude_deg,
+                   observation.altitude_ellipsoid_m, observation.ground_speed_kt,
+                   observation.track_deg, observation.vertical_rate_ft_min]
+        encoded = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()[:20]
+
+    def ingest(self, feed, aircraft, aircraft_id, local_read_ms):
+        self.select_aircraft(aircraft_id)
+        snapshot_s = feed.get("now")
+        base = {
+            "aircraft_id": aircraft_id,
+            "snapshot_now": snapshot_s,
+            "seen_pos": aircraft.get("seen_pos"),
+            "source_snapshot_timestamp_ms": None,
+            "source_observation_timestamp_ms": None,
+            "local_read_timestamp_ms": local_read_ms,
+            "source_age_ms": None,
+            "source_update_identity": None,
+            "latitude_deg": aircraft.get("lat"),
+            "longitude_deg": aircraft.get("lon"),
+            "altitude_ellipsoid_m": None,
+            "ground_speed_kt": aircraft.get("gs"),
+            "track_deg": aircraft.get("track"),
+            "vertical_rate_ft_min": aircraft.get("geom_rate"),
+            "duplicate": False,
+            "estimator_accepted": False,
+        }
+        try:
+            observation = observation_from_adsb(aircraft, aircraft_id, snapshot_s, local_read_ms)
+            snapshot_ms = round(float(snapshot_s) * 1000)
+            base.update(source_snapshot_timestamp_ms=snapshot_ms,
+                        source_observation_timestamp_ms=observation.timestamp_ms,
+                        source_age_ms=local_read_ms - observation.timestamp_ms,
+                        altitude_ellipsoid_m=observation.altitude_ellipsoid_m)
+            if self.last_snapshot_ms is not None and snapshot_ms < self.last_snapshot_ms - 1000:
+                raise ValueError("dump1090 snapshot clock jumped backward")
+            identity = self._identity(observation)
+            base["source_update_identity"] = identity
+            if identity == self.last_update_identity:
+                base.update(duplicate=True, timing_status="DUPLICATE")
+                self.last_snapshot_ms = max(self.last_snapshot_ms or snapshot_ms, snapshot_ms)
+                return AdsbIntakeResult(None, base, True)
+            if (self.last_observation_ms is not None
+                    and observation.timestamp_ms <= self.last_observation_ms):
+                raise ValueError("source observation time did not advance for changed payload")
+            self.last_snapshot_ms = snapshot_ms
+            self.last_observation_ms = observation.timestamp_ms
+            self.last_update_identity = identity
+            base["timing_status"] = "NEW"
+            return AdsbIntakeResult(observation, base, False)
+        except (TypeError, ValueError, OverflowError) as error:
+            base.update(timing_status="INVALID", timing_error=str(error))
+            return AdsbIntakeResult(None, base, False)
 
 
 def configured_effective_latency_s(value=None):
@@ -259,6 +349,7 @@ async def run(args):
     selected_id = None
     bluetooth_state = "DISCONNECTED"
     diagnostics = Diagnostics(args.log)
+    adsb_intake = AdsbObservationIntake()
     intentional_disconnect = False
     disconnected_at = None
     disconnect_state = None
@@ -394,13 +485,16 @@ async def run(args):
                 if new_id != selected_id:
                     selected_id = new_id
                     source.select_aircraft(new_id)
+                    adsb_intake.select_aircraft(new_id)
                     controller.reset_target(new_id) if new_id else None
                 if selected_id:
                     aircraft = next((item for item in feed.get("aircraft") or []
                                      if clean_hex(item.get("hex")) == selected_id), None)
-                    observation = observation_from_adsb(aircraft or {}, selected_id, utc_ms())
-                    if observation:
-                        source.update(observation)
+                    local_read_ms = utc_ms()
+                    result = adsb_intake.ingest(feed, aircraft or {}, selected_id, local_read_ms)
+                    accepted = bool(result.observation and source.update(result.observation))
+                    result.diagnostics["estimator_accepted"] = accepted
+                    diagnostics.event("adsb_source_observation", **result.diagnostics)
             except Exception as error:
                 diagnostics.event("adsb_poll_failure", exception_type=type(error).__name__,
                                   exception=str(error))
