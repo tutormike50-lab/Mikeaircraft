@@ -4,6 +4,8 @@ const path = require('node:path');
 const test = require('node:test');
 
 const bootstrap = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'pi-bridge', 'bootstrap-recovery.py'), 'utf8');
+const releaseAgent = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'release_agent.py'), 'utf8');
+const releaseService = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'pi-bridge', 'mikeaircraft-release-agent.service'), 'utf8');
 
 test('recovery bootstrap is fixed-purpose and preserves existing secrets and bridge unit', () => {
   assert.match(bootstrap, /RELEASE_ID = "ec9b423-recovery-bootstrap-v1"/);
@@ -11,6 +13,18 @@ test('recovery bootstrap is fixed-purpose and preserves existing secrets and bri
   assert.match(bootstrap, /existing Pi bridge service is required and was not replaced/);
   assert.doesNotMatch(bootstrap, /cp -a|shutil\.copytree|shell=True/);
   assert.doesNotMatch(bootstrap, /write_text\([^\n]*ENV_FILE|atomic_write\(ENV_FILE/);
+  assert.match(bootstrap, /SOURCE_DIR = Path\("\/home\/mike\/MikeAircraft"\)/);
+  assert.match(bootstrap, /INSTALL_DIR = Path\("\/opt\/mikeaircraft"\)/);
+  assert.doesNotMatch(bootstrap, /git", "-C", str\(INSTALL_DIR\)/);
+  assert.match(bootstrap, /git@github\.com:tutormike50-lab\/mikeaircraft/);
+});
+
+test('permanent release agent reads Git source and writes only runtime installation', () => {
+  assert.match(releaseAgent, /MIKEAIRCRAFT_SOURCE_DIR", "\/home\/mike\/MikeAircraft"/);
+  assert.match(releaseAgent, /MIKEAIRCRAFT_INSTALL_DIR", "\/opt\/mikeaircraft"/);
+  assert.match(releaseService, /ProtectHome=read-only/);
+  assert.match(releaseService, /ReadOnlyPaths=\/home\/mike\/MikeAircraft/);
+  assert.match(releaseService, /ReadWritePaths=\/opt\/mikeaircraft/);
 });
 
 test('recovery bootstrap pins all five release paths and exact ec9 tracker hashes', () => {

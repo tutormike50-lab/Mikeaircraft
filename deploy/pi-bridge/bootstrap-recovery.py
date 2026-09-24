@@ -23,6 +23,7 @@ import urllib.request
 REPOSITORY = "https://github.com/tutormike50-lab/Mikeaircraft.git"
 RAW_ROOT = "https://raw.githubusercontent.com/tutormike50-lab/Mikeaircraft"
 INSTALL_DIR = Path("/opt/mikeaircraft")
+SOURCE_DIR = Path("/home/mike/MikeAircraft")
 ENV_FILE = Path("/etc/mikeaircraft/pi-bridge.env")
 SYSTEMD_DIR = Path("/etc/systemd/system")
 BRIDGE_SERVICE = "mikeaircraft-pi-bridge.service"
@@ -34,14 +35,14 @@ RELEASE_ID = "ec9b423-recovery-bootstrap-v1"
 # the exact ec9b423 bytes; the bridge/manager hashes are infrastructure only.
 PI_FILES = {
     "scripts/pi_bridge.py": "90ee92489107dbca112e6ba7294541446a6d42f8906703bef7ddf30cc8456991",
-    "scripts/release_manager.py": "112d451df6201181ead3e367305da9408457890c732673a90b61c6b34fedd6b7",
+    "scripts/release_manager.py": "bfacddd9f5c59bd78b5e783f040a90158eaf812fa8a6b4a8c07e0d26b6ffb231",
     "scripts/production_tracker.py": "40215803f7e864121781c56c27d1818f5115fb204d31cc785d8a63b72e640d20",
     "scripts/production_tracking.py": "27f8ba829826fe737285767c109814d71815fd905249879f80f2b3f1cdd0cb50",
     "scripts/camera_optics.py": "d7c5a2f1d634fd219f631e3bcca6444938333c75dd849b1f0e04c088e122f7f9",
 }
 BOOTSTRAP_FILES = {
-    "scripts/release_agent.py": "b6c74b161b65ace0e1c38da06054017ce75e88a61ef31b683a6beb9cf3d3e86b",
-    "deploy/pi-bridge/mikeaircraft-release-agent.service": "216f048ac57d53357e8d7db4f8e3273492a7e0357d1e3841b64ec7238fc7bb84",
+    "scripts/release_agent.py": "cc850922ed6793d70a263c2cbcb73e71f3ae9fe8ecbe19398180b036fcea0ec8",
+    "deploy/pi-bridge/mikeaircraft-release-agent.service": "fbc3db8b71e6f341f70f0279c88f27e8d795737821fa4460dc4fb1aa62fb3f6c",
     "deploy/pi-bridge/mikeaircraft-release-agent.timer": "36093a5b03176969456654115c0bbd4ff4e7055f769a3ba93eb211bfe0087039",
 }
 
@@ -109,6 +110,15 @@ def atomic_write(target, source):
     os.replace(temporary, target)
 
 
+def is_reviewed_origin(value):
+    normalized = value.strip().lower().removesuffix(".git")
+    return normalized in {
+        "https://github.com/tutormike50-lab/mikeaircraft",
+        "git@github.com:tutormike50-lab/mikeaircraft",
+        "ssh://git@github.com/tutormike50-lab/mikeaircraft",
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server-commit", required=True)
@@ -122,6 +132,11 @@ def main(argv=None):
         raise BootstrapError("existing /etc/mikeaircraft/pi-bridge.env is required and was not changed")
     if run("systemctl", "cat", BRIDGE_SERVICE, check=False).returncode != 0:
         raise BootstrapError("existing Pi bridge service is required and was not replaced")
+    if not (SOURCE_DIR / ".git").exists():
+        raise BootstrapError("existing /home/mike/MikeAircraft Git checkout is required")
+    remote = run("git", "-C", str(SOURCE_DIR), "remote", "get-url", "origin").stdout.strip()
+    if not is_reviewed_origin(remote):
+        raise BootstrapError("existing /home/mike/MikeAircraft origin is not the reviewed repository")
 
     environment = read_environment(ENV_FILE)
     base_url = environment.get("MIKEAIRCRAFT_BASE_URL", "").rstrip("/")
@@ -175,17 +190,10 @@ def main(argv=None):
         for path, target in destinations.items():
             atomic_write(target, stage_dir / path)
 
-        # Leave the existing checkout and all unrelated files intact; only make
-        # sure it can fetch the exact reviewed commit for subsequent releases.
-        if not (INSTALL_DIR / ".git").exists():
-            run("git", "-C", str(INSTALL_DIR), "init")
-            run("git", "-C", str(INSTALL_DIR), "remote", "add", "origin", REPOSITORY)
-        else:
-            remote = run("git", "-C", str(INSTALL_DIR), "remote", "get-url", "origin").stdout.strip()
-            if remote.lower() != REPOSITORY.lower():
-                raise BootstrapError("existing /opt/mikeaircraft origin is not the reviewed repository")
-        run("git", "-C", str(INSTALL_DIR), "fetch", "--quiet", "origin", commit)
-        run("git", "-C", str(INSTALL_DIR), "cat-file", "-e", commit + "^{commit}")
+        # Fetch and verify only in the existing source checkout. The runtime
+        # installation deliberately remains a non-Git directory.
+        run("git", "-C", str(SOURCE_DIR), "fetch", "--quiet", "origin", commit)
+        run("git", "-C", str(SOURCE_DIR), "cat-file", "-e", commit + "^{commit}")
 
         marker_value = {**recovery_manifest, "installedAt": int(time.time())}
         marker_temp = marker.with_suffix(".json.bootstrap-new")

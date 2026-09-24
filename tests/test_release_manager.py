@@ -65,5 +65,25 @@ class ReleaseManagerTests(unittest.TestCase):
         manager.rollback(pending, "health failure")
         self.assertFalse((self.root / "scripts" / "production_tracker.py").exists())
 
+    def test_git_source_and_runtime_install_are_separate(self):
+        source = self.root / "source"
+        runtime = self.root / "runtime"
+        source.mkdir()
+        (runtime / "scripts").mkdir(parents=True)
+        for path, value in self.old.items(): (runtime / path).write_bytes(value)
+        commands = []
+
+        def runner(command, **kwargs):
+            commands.append(command)
+            if command[-2] == "show": return Result(self.new[command[-1].split(":", 1)[1]])
+            return Result()
+
+        manager = release_manager.ReleaseManager(source, runtime, runner=runner)
+        pending = manager.stage(self.manifest)
+        manager.install_staged(pending)
+        self.assertTrue(all(command[2] == str(source.resolve()) for command in commands))
+        self.assertEqual((runtime / "scripts/pi_bridge.py").read_bytes(), self.new["scripts/pi_bridge.py"])
+        self.assertFalse((source / "scripts/pi_bridge.py").exists())
+
 
 if __name__ == "__main__": unittest.main()

@@ -47,8 +47,9 @@ def wait_for_health(manager, release_id, timeout=30):
 def main():
     base_url = os.environ["MIKEAIRCRAFT_BASE_URL"]
     token = os.environ["MIKEAIRCRAFT_PI_BRIDGE_TOKEN"]
-    repo_dir = Path(os.environ.get("MIKEAIRCRAFT_REPO_DIR", "/opt/mikeaircraft"))
-    manager = ReleaseManager(repo_dir)
+    source_dir = Path(os.environ.get("MIKEAIRCRAFT_SOURCE_DIR", "/home/mike/MikeAircraft"))
+    install_dir = Path(os.environ.get("MIKEAIRCRAFT_INSTALL_DIR", "/opt/mikeaircraft"))
+    manager = ReleaseManager(source_dir, install_dir)
     manifest = fetch_approved(base_url, token)
     if manifest is None:
         return

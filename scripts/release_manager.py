@@ -65,11 +65,12 @@ def validate_manifest(value):
 
 
 class ReleaseManager:
-    def __init__(self, repo_dir, runner=subprocess.run, now=time.time):
-        self.repo_dir = Path(repo_dir).resolve()
+    def __init__(self, source_dir, install_dir=None, runner=subprocess.run, now=time.time):
+        self.source_dir = Path(source_dir).resolve()
+        self.install_dir = Path(install_dir or source_dir).resolve()
         self.runner = runner
         self.now = now
-        self.state_dir = self.repo_dir / "var" / "releases"
+        self.state_dir = self.install_dir / "var" / "releases"
         self.installed_marker = self.state_dir / "installed.json"
         self.pending_marker = self.state_dir / "pending.json"
 
@@ -80,7 +81,7 @@ class ReleaseManager:
             return None
 
     def _git(self, *args, check=True):
-        return self.runner(["git", "-C", str(self.repo_dir), *args], check=check,
+        return self.runner(["git", "-C", str(self.source_dir), *args], check=check,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def _object(self, commit, path):
@@ -107,7 +108,7 @@ class ReleaseManager:
                 target.write_bytes(content)
                 if target.suffix == ".py":
                     py_compile.compile(str(target), doraise=True)
-                existing = self.repo_dir / item["path"]
+                existing = self.install_dir / item["path"]
                 if existing.exists():
                     saved = backup / item["path"]
                     saved.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +128,7 @@ class ReleaseManager:
     def install_staged(self, pending):
         for item in pending["piFiles"]:
             source = Path(pending["stagingDir"]) / item["path"]
-            target = self.repo_dir / item["path"]
+            target = self.install_dir / item["path"]
             target.parent.mkdir(parents=True, exist_ok=True)
             os.replace(source, target)
         return pending
@@ -148,7 +149,7 @@ class ReleaseManager:
         existing_paths = set(pending.get("existingPaths", []))
         for item in pending["piFiles"]:
             saved = backup / item["path"]
-            target = self.repo_dir / item["path"]
+            target = self.install_dir / item["path"]
             if saved.exists():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 temporary = target.with_suffix(target.suffix + ".rollback")
