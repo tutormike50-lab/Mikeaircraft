@@ -15,7 +15,7 @@ SERVICE = "mikeaircraft-pi-bridge.service"
 
 def fetch_approved(base_url, token, opener=urllib.request.urlopen):
     request = urllib.request.Request(
-        base_url.rstrip("/") + "/api/pi-bridge", method="GET",
+        base_url.rstrip("/") + "/api/release-feed", method="GET",
         headers={"Authorization": "Bearer " + token, "User-Agent": "MikeAircraft-Release-Agent/1"})
     with opener(request, timeout=10) as response:
         body = json.loads(response.read().decode("utf-8"))

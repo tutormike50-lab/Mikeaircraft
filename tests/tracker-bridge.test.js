@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { publicState } = require('../lib/tracker-bridge-state');
 const control = require('../api/tracker-control');
 const piBridge = require('../api/pi-bridge');
+const releaseFeed = require('../api/release-feed');
 
 function response() {
   return { code: 200, headers: {}, setHeader(k, v) { this.headers[k] = v; },
@@ -90,6 +91,26 @@ test('Pi auth diagnostic is read-only and reports only the accepted token finger
     assert.match(res.body.tokenFingerprint, /^[0-9a-f]{12}$/);
     assert.equal(res.body.tokenFingerprint, piBridge.tokenFingerprint('bridge-secret'));
   } finally { restoreEnv(old); }
+});
+
+test('release poller feed returns only the explicitly approved manifest to the bridge token', async () => {
+  const old = saveEnv();
+  process.env.MIKEAIRCRAFT_PI_BRIDGE_TOKEN = 'bridge-secret';
+  process.env.KV_REST_API_URL = 'https://redis.invalid';
+  process.env.KV_REST_API_TOKEN = 'redis-token';
+  process.env.VERCEL_GIT_COMMIT_SHA = 'a'.repeat(40);
+  const approved = { manifest: { schema: 1, releaseId: 'recovery', serverCommit: 'a'.repeat(40), piFiles: [] } };
+  global.fetch = async () => ({ ok: true, json: async () => ({ result: JSON.stringify(approved) }) });
+  try {
+    const denied = response(); await releaseFeed({ method: 'GET', headers: {} }, denied);
+    assert.equal(denied.code, 401);
+    const res = response(); await releaseFeed({ method: 'GET', headers: { authorization: 'Bearer bridge-secret' } }, res);
+    assert.equal(res.code, 200); assert.deepEqual(res.body.approvedRelease, approved);
+    assert.equal(res.body.serverVersion, 'a'.repeat(40));
+  } finally {
+    delete process.env.VERCEL_GIT_COMMIT_SHA;
+    restoreEnv(old);
+  }
 });
 
 test('Pi auth failures are classified in protected server diagnostics only', async () => {

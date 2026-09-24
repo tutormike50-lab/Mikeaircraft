@@ -57,5 +57,13 @@ class ReleaseManagerTests(unittest.TestCase):
         self.assertEqual(calibration.read_bytes(), b"calibration")
         self.assertEqual(env.read_bytes(), b"SECRET=kept")
 
+    def test_rollback_removes_managed_file_that_did_not_exist_before(self):
+        (self.root / "scripts" / "production_tracker.py").unlink()
+        manager = release_manager.ReleaseManager(self.root, runner=self.runner)
+        pending = manager.stage(self.manifest); manager.install_staged(pending)
+        self.assertTrue((self.root / "scripts" / "production_tracker.py").exists())
+        manager.rollback(pending, "health failure")
+        self.assertFalse((self.root / "scripts" / "production_tracker.py").exists())
+
 
 if __name__ == "__main__": unittest.main()

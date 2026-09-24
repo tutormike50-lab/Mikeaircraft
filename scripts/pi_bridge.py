@@ -84,6 +84,19 @@ class PiBridge:
         self.telemetry = None
         self.release_manager = ReleaseManager(self.repo_dir)
         self.health_path = self.repo_dir / "var" / "releases" / "bridge-health.json"
+        self.tracker_check_ok, self.tracker_check_detail = self._check_tracker()
+
+    def _check_tracker(self):
+        command = [sys.executable, str(self.repo_dir / "scripts" / "production_tracker.py"),
+                   "--check", "--direct"]
+        try:
+            result = subprocess.run(command, cwd=str(self.repo_dir), check=False,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, timeout=15)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return False, str(error)
+        detail = " | ".join(line.strip() for line in result.stdout.splitlines() if line.strip())
+        return result.returncode == 0, detail[-600:]
 
     def heartbeat(self):
         self.refresh_process()
@@ -92,7 +105,7 @@ class PiBridge:
         reported_release = release or (pending and {"releaseId": pending.get("releaseId"),
                                                      "serverCommit": pending.get("serverCommit"),
                                                      "candidate": True})
-        tracker_health = "FAULT" if self.tracker_state == "FAULT" else ("IDLE" if self.tracker_state == "STOPPED" else "HEALTHY")
+        tracker_health = "FAULT" if self.tracker_state == "FAULT" or not self.tracker_check_ok else "HEALTHY"
         payload = json.dumps({"trackerState": self.tracker_state,
                               "currentAircraft": self.current_aircraft,
                               "rs4State": self.rs4_state,

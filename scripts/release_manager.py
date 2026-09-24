@@ -112,8 +112,11 @@ class ReleaseManager:
                     saved = backup / item["path"]
                     saved.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(existing, saved)
+            existing_paths = [item["path"] for item in manifest["piFiles"]
+                              if (backup / item["path"]).exists()]
             pending = {**manifest, "backupDir": str(backup), "stagingDir": str(staging),
-                       "previous": current or None, "startedAt": int(self.now())}
+                       "previous": current or None, "existingPaths": existing_paths,
+                       "startedAt": int(self.now())}
             self._write_json(self.pending_marker, pending)
             return pending
         except Exception:
@@ -141,12 +144,18 @@ class ReleaseManager:
         if not pending:
             return None
         backup = Path(pending["backupDir"])
+        tracks_existing_paths = "existingPaths" in pending
+        existing_paths = set(pending.get("existingPaths", []))
         for item in pending["piFiles"]:
             saved = backup / item["path"]
             target = self.repo_dir / item["path"]
             if saved.exists():
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(saved, target)
+                temporary = target.with_suffix(target.suffix + ".rollback")
+                shutil.copy2(saved, temporary)
+                os.replace(temporary, target)
+            elif tracks_existing_paths and item["path"] not in existing_paths and target.exists():
+                target.unlink()
         previous = pending.get("previous")
         if previous:
             self._write_json(self.installed_marker, previous)
