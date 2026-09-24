@@ -96,6 +96,22 @@ class PiBridgeTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         bridge._close_output()
 
+    def test_crash_reports_redacted_tracker_output_tail(self):
+        process = FakeProcess()
+        bridge, _ = self.make_bridge(lambda *args, **kwargs: process)
+        bridge.start(9)
+        bridge.output_handle.write("setup detail\n")
+        bridge.output_handle.write("PRODUCTION TRACKER FAULT: RuntimeError: pin\n")
+        process.code = 1
+
+        with mock.patch("builtins.print") as report:
+            bridge.refresh_process()
+
+        self.assertIn("RuntimeError", bridge.fault)
+        self.assertNotIn("pin", bridge.fault)
+        self.assertIn("[REDACTED]", bridge.fault)
+        report.assert_called_once_with(bridge.fault, flush=True)
+
 
 if __name__ == "__main__":
     unittest.main()

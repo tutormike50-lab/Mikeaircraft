@@ -69,6 +69,7 @@ class PiBridge:
         self.now = now
         self.process = None
         self.output_handle = None
+        self.output_path = None
         self.diagnostics_path = None
         self.diagnostics_offset = 0
         self.tracker_state = "STOPPED"
@@ -101,6 +102,7 @@ class PiBridge:
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(self.now()))
         self.diagnostics_path = self.log_dir / ("production-tracker-" + stamp + ".jsonl")
         output_path = self.log_dir / ("production-tracker-" + stamp + ".log")
+        self.output_path = output_path
         self.output_handle = output_path.open("a", encoding="utf-8", buffering=1)
         command = [sys.executable, str(self.repo_dir / "scripts" / "production_tracker.py"),
                    "--track", "--log", str(self.diagnostics_path)]
@@ -167,7 +169,11 @@ class PiBridge:
         self.process = None
         self._close_output()
         self.tracker_state = "FAULT"
+        detail = self._output_tail()
         self.fault = "Production tracker exited with code " + str(code)
+        if detail:
+            self.fault += ": " + detail
+        print(self.fault, flush=True)
 
     def reconcile(self, desired):
         generation = int(desired.get("generation") or 0)
@@ -197,6 +203,22 @@ class PiBridge:
         if self.output_handle:
             self.output_handle.close()
             self.output_handle = None
+
+    def _output_tail(self, max_lines=6, max_chars=1200):
+        """Return a concise, single-line tail of tracker output for fault reporting."""
+        if not self.output_path or not self.output_path.exists():
+            return ""
+        try:
+            lines = self.output_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return ""
+        detail = " | ".join(line.strip() for line in lines[-max_lines:] if line.strip())
+        for secret in (self.token, self.control_pin):
+            if secret:
+                detail = detail.replace(secret, "[REDACTED]")
+        if len(detail) > max_chars:
+            detail = "…" + detail[-(max_chars - 1):]
+        return detail
 
     def run(self):
         while True:
