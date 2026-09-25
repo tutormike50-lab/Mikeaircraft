@@ -34,7 +34,7 @@ ADS_B_POLL_S = 0.20
 TELEMETRY_MAX_AGE_S = 2.0
 RS4_YAW_SIGN = 1
 RS4_PITCH_SIGN = 1
-PITCH_ACQUIRE_COMMAND = -25
+PITCH_ACQUIRE_COMMAND = 25
 PITCH_ACQUIRE_DURATION_S = 0.50
 PITCH_ACQUIRE_COMMAND_BUDGET = 10
 
@@ -360,8 +360,8 @@ class OneShotPitchAcquisition:
     def __init__(self, command=PITCH_ACQUIRE_COMMAND,
                  duration_s=PITCH_ACQUIRE_DURATION_S,
                  command_budget=PITCH_ACQUIRE_COMMAND_BUDGET):
-        if command >= 0:
-            raise ValueError("pitch acquisition command must oppose b72738c's positive/down motion")
+        if command <= 0:
+            raise ValueError("pitch acquisition command must use the verified positive/up motion")
         if duration_s <= 0 or command_budget <= 0:
             raise ValueError("pitch acquisition budgets must be positive")
         self.command = int(command)
