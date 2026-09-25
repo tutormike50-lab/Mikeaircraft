@@ -35,8 +35,11 @@ TELEMETRY_MAX_AGE_S = 2.0
 RS4_YAW_SIGN = 1
 RS4_PITCH_SIGN = 1
 PITCH_ACQUIRE_COMMAND = 100
-PITCH_ACQUIRE_DURATION_S = 2.0
-PITCH_ACQUIRE_COMMAND_BUDGET = 40
+PITCH_FENCE_DEG = 12.0
+PITCH_ON_TARGET_DEG = 1.0
+PITCH_MAX_CUMULATIVE_S = 2.0
+PITCH_ACQUIRE_TIMEOUT_S = 8.0
+PITCH_TELEMETRY_STALE_S = 2.5
 
 RS4_PROTOCOL_REQUESTS = {
     (0x04, 0x02, 0x00, 0x04, 0x38),
@@ -349,90 +352,152 @@ class AdsbObservationIntake:
 @dataclass(frozen=True)
 class PitchAcquireDecision:
     command: int
+    state: str = "ACQUIRE"
+    reason: object = None
+    pulse_duration_s: float = 0.0
+    physical_pitch_deg: object = None
+    error_deg: object = None
     event: object = None
 
 
-class OneShotPitchAcquisition:
-    """One bounded UP pulse for each never-before-seen Direct Tracker ICAO."""
+class AltitudePitchAcquisition:
+    """Bounded pulse-to-position acquisition using fresh RS4 pitch telemetry."""
 
     SAFE_TARGET_STATUSES = {"VALID", "PREDICTED"}
 
-    def __init__(self, command=PITCH_ACQUIRE_COMMAND,
-                 duration_s=PITCH_ACQUIRE_DURATION_S,
-                 command_budget=PITCH_ACQUIRE_COMMAND_BUDGET):
-        if command != 100:
-            raise ValueError("the physically proven acquisition command is +100")
-        if duration_s > 2.0:
-            raise ValueError("pitch acquisition duration cannot exceed 2.0 seconds")
-        if duration_s <= 0 or command_budget <= 0:
-            raise ValueError("pitch acquisition budgets must be positive")
-        self.command = int(command)
-        self.duration_s = float(duration_s)
-        self.command_budget = int(command_budget)
-        self.seen_aircraft = set()
+    def __init__(self, timeout_s=PITCH_ACQUIRE_TIMEOUT_S,
+                 stale_s=PITCH_TELEMETRY_STALE_S,
+                 cumulative_limit_s=PITCH_MAX_CUMULATIVE_S):
+        if timeout_s <= 0 or stale_s <= 0 or cumulative_limit_s <= 0:
+            raise ValueError("pitch acquisition limits must be positive")
+        self.timeout_s = float(timeout_s)
+        self.stale_s = float(stale_s)
+        self.cumulative_limit_s = float(cumulative_limit_s)
         self.selected_id = None
-        self.armed_id = None
+        self.state = "IDLE"
         self.started_at = None
-        self.commands_sent = 0
+        self.pulse_until = None
+        self.pulse_duration_s = 0.0
+        self.pulse_command = 0
+        self.pulse_telemetry_at = None
+        self.cumulative_s = 0.0
+        self.final_reason = None
 
     def select(self, aircraft_id):
         if aircraft_id == self.selected_id:
-            return
+            return None
+        previous = self.selected_id
         self.selected_id = aircraft_id
+        event = None
+        if previous and self.state in {"READY", "PULSE", "WAIT_TELEMETRY"}:
+            event = self._event("PITCH_ACQUIRE_DONE", previous, "ABORT", "TARGET_CHANGED")
+        self.state = "READY" if aircraft_id else "IDLE"
         self.started_at = None
-        self.commands_sent = 0
-        if aircraft_id and aircraft_id not in self.seen_aircraft:
-            self.seen_aircraft.add(aircraft_id)
-            self.armed_id = aircraft_id
-        else:
-            self.armed_id = None
+        self.pulse_until = None
+        self.pulse_duration_s = 0.0
+        self.pulse_command = 0
+        self.pulse_telemetry_at = None
+        self.cumulative_s = 0.0
+        self.final_reason = None
+        return event
 
-    def command_for(self, aircraft_id, target_status, now_s):
-        if aircraft_id != self.selected_id and self.started_at is not None:
-            finished = self._finish(now_s, "SELECTION_CHANGED")
-            self.select(aircraft_id)
-            return finished
-        self.select(aircraft_id)
-        if not aircraft_id or target_status not in self.SAFE_TARGET_STATUSES:
-            if self.started_at is not None:
-                return self._finish(now_s, f"TARGET_{target_status}")
-            return PitchAcquireDecision(0)
-        if self.armed_id != aircraft_id:
-            return PitchAcquireDecision(0)
+    @staticmethod
+    def physical_pitch(raw_home_pitch, raw_current_pitch):
+        values = (raw_home_pitch, raw_current_pitch)
+        if not all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                   and math.isfinite(value) for value in values):
+            return None
+        return (float(raw_home_pitch) - float(raw_current_pitch)) / 10.0
+
+    @staticmethod
+    def pulse_duration(error_deg):
+        magnitude = abs(error_deg)
+        if magnitude > 4.0:
+            return 0.40
+        if magnitude > 1.5:
+            return 0.20
+        if magnitude > 1.0:
+            return 0.10
+        return 0.0
+
+    def command_for(self, aircraft_id, target, raw_home_pitch, raw_current_pitch,
+                    telemetry_at, now_s):
+        selection_event = self.select(aircraft_id)
+        physical = self.physical_pitch(raw_home_pitch, raw_current_pitch)
+        desired = getattr(target, "target_pitch_relative_deg", None)
+        error = (None if physical is None or not isinstance(desired, (int, float))
+                 or isinstance(desired, bool) or not math.isfinite(desired)
+                 else float(desired) - physical)
+        if selection_event:
+            return PitchAcquireDecision(0, "ABORT", "TARGET_CHANGED", 0.0,
+                                        physical, error, selection_event)
+        if not aircraft_id:
+            return PitchAcquireDecision(0, "IDLE", physical_pitch_deg=physical,
+                                        error_deg=error)
+        if self.state in {"ACQUIRED", "ABORT"}:
+            return PitchAcquireDecision(0, self.state, self.final_reason, 0.0,
+                                        physical, error)
+        if (getattr(target, "status", None) not in self.SAFE_TARGET_STATUSES
+                or not getattr(target, "vertical_valid", False) or error is None):
+            return self._finish("ABORT", "TARGET_INVALID", physical, error)
+        if desired < -PITCH_FENCE_DEG or desired > PITCH_FENCE_DEG:
+            return self._finish("ABORT", "TARGET_OUTSIDE_PITCH_FENCE", physical, error)
+        if telemetry_at is None or now_s - telemetry_at > self.stale_s:
+            return self._finish("ABORT", "STALE_TELEMETRY", physical, error)
+        if physical <= -PITCH_FENCE_DEG or physical >= PITCH_FENCE_DEG:
+            return self._finish("ABORT", "FENCE", physical, error)
+        start_event = None
         if self.started_at is None:
             self.started_at = now_s
-            start = {
-                "name": "PITCH_ACQUIRE_START",
-                "selected_icao": aircraft_id,
-                "commanded_direction": "PHYSICAL_UP_PROVEN_V2",
-                "pulse_command": self.command,
-                "duration_budget_s": self.duration_s,
-                "command_budget": self.command_budget,
-            }
-        else:
-            start = None
-        elapsed = max(0.0, now_s - self.started_at)
-        if elapsed >= self.duration_s or self.commands_sent >= self.command_budget:
-            return self._finish(now_s, "BUDGET_COMPLETE")
-        self.commands_sent += 1
-        return PitchAcquireDecision(self.command, start)
+            start_event = self._event("PITCH_ACQUIRE_START", aircraft_id,
+                                      "ACQUIRE", None)
+        if now_s - self.started_at >= self.timeout_s:
+            return self._finish("ABORT", "TIMEOUT", physical, error)
+        if self.state == "PULSE":
+            if now_s < self.pulse_until:
+                return PitchAcquireDecision(self.pulse_command, "ACQUIRE", None,
+                                            self.pulse_duration_s, physical, error,
+                                            start_event)
+            self.state = "WAIT_TELEMETRY"
+            # Mark telemetry observed at pulse completion and emit a neutral
+            # frame.  A later notification must arrive before another pulse.
+            self.pulse_telemetry_at = telemetry_at
+            return PitchAcquireDecision(0, "ACQUIRE", None, 0.0, physical,
+                                        error, start_event)
+        if self.state == "WAIT_TELEMETRY":
+            if telemetry_at <= self.pulse_telemetry_at:
+                return PitchAcquireDecision(0, "ACQUIRE", None, 0.0, physical,
+                                            error, start_event)
+            self.state = "READY"
+        if abs(error) <= PITCH_ON_TARGET_DEG:
+            return self._finish("ACQUIRED", "ON_TARGET", physical, error)
+        duration = self.pulse_duration(error)
+        if self.cumulative_s + duration > self.cumulative_limit_s + 1e-9:
+            return self._finish("ABORT", "TIMEOUT", physical, error)
+        self.state = "PULSE"
+        self.pulse_until = now_s + duration
+        self.pulse_duration_s = duration
+        self.pulse_command = PITCH_ACQUIRE_COMMAND if error > 0 else -PITCH_ACQUIRE_COMMAND
+        self.pulse_telemetry_at = telemetry_at
+        self.cumulative_s += duration
+        pulse_event = self._event("PITCH_ACQUIRE_PULSE", aircraft_id, "ACQUIRE", None)
+        pulse_event.update(tilt_command=self.pulse_command, pulse_duration_s=duration,
+                           physical_pitch_from_home_deg=physical,
+                           pitch_error_deg=error)
+        return PitchAcquireDecision(self.pulse_command, "ACQUIRE", None, duration,
+                                    physical, error, pulse_event or start_event)
 
-    def _finish(self, now_s, reason):
-        elapsed = max(0.0, now_s - self.started_at)
-        event = {
-            "name": "PITCH_ACQUIRE_DONE",
-            "selected_icao": self.armed_id,
-            "commanded_direction": "PHYSICAL_UP_PROVEN_V2",
-            "pulse_command": self.command,
-            "elapsed_s": elapsed,
-            "duration_budget_s": self.duration_s,
-            "commands_sent": self.commands_sent,
-            "command_budget": self.command_budget,
-            "completion": reason,
-        }
-        self.armed_id = None
-        self.started_at = None
-        return PitchAcquireDecision(0, event)
+    def _event(self, name, aircraft_id, state, reason):
+        return {"name": name, "selected_icao": aircraft_id,
+                "pitch_state": state, "stop_reason": reason,
+                "cumulative_nonzero_s": self.cumulative_s}
+
+    def _finish(self, state, reason, physical, error):
+        self.state = state
+        self.final_reason = reason
+        event = self._event("PITCH_ACQUIRE_DONE", self.selected_id, state, reason)
+        event.update(physical_pitch_from_home_deg=physical, pitch_error_deg=error)
+        return PitchAcquireDecision(0, state, reason, 0.0, physical, error, event)
 
 
 def apply_pitch_acquisition(controller_output, decision):
@@ -457,7 +522,8 @@ class Diagnostics:
     def __init__(self, path):
         self.handle = Path(path).open("a", encoding="utf-8", buffering=1)
 
-    def write(self, target, output, telemetry, bluetooth_state, optics):
+    def write(self, target, output, telemetry, bluetooth_state, optics,
+              camera=None, aircraft=None, pitch=None):
         row = target.as_dict()
         optics_fields = optics.as_dict()
         frame_x = normalized_frame_offset(output.yaw_error_deg, optics.horizontal_fov_deg)
@@ -491,6 +557,21 @@ class Diagnostics:
             "requested_pitch_rate_deg_s": output.requested_pitch_rate_deg_s,
             "final_rs4_pan_command": output.pan_command,
             "final_rs4_tilt_command": output.tilt_command,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "icao": target.aircraft_id,
+            "callsign": (aircraft or {}).get("callsign"),
+            "aircraft_altitude_m": (aircraft or {}).get("altitude_m"),
+            "aircraft_altitude_provenance": target.altitude_source,
+            "vertical_rate_ft_min": (aircraft or {}).get("vertical_rate_ft_min"),
+            "camera_home_elevation_deg": (camera.home_elevation_deg if camera else None),
+            "raw_home_pitch": telemetry.get("raw_home_pitch"),
+            "raw_current_pitch": telemetry.get("raw_current_pitch"),
+            "physical_pitch_from_home_deg": (pitch.physical_pitch_deg if pitch else None),
+            "acquisition_pitch_error_deg": (pitch.error_deg if pitch else None),
+            "pitch_state": (pitch.state if pitch else None),
+            "pitch_stop_reason": (pitch.reason if pitch else None),
+            "pitch_pulse_duration_s": (pitch.pulse_duration_s if pitch else 0.0),
+            "current_pan_command": output.pan_command,
             "bluetooth_state": bluetooth_state,
             "camera_optics": optics_fields,
             "slider_position": optics.slider_position_0_1,
@@ -563,7 +644,8 @@ async def run(args):
     protocol_responses = asyncio.Queue()
     protocol_response_count = 0
     write_lock = asyncio.Lock()
-    pitch_acquisition = OneShotPitchAcquisition()
+    pitch_acquisition = AltitudePitchAcquisition()
+    aircraft_log = {}
 
     def record_disconnect(disconnected_client, occurred_at):
         nonlocal bluetooth_state, disconnected_at, disconnect_state
@@ -715,7 +797,7 @@ async def run(args):
 
     async def poll_aircraft():
         """Keep network latency out of the proven 20 Hz RS4 write cadence."""
-        nonlocal selected_id
+        nonlocal selected_id, aircraft_log
         while True:
             requested_at = time.monotonic()
             try:
@@ -729,6 +811,7 @@ async def run(args):
                     selection = current_selection(engine)
                 new_id = selection and selection["aircraft_id"]
                 if new_id != selected_id:
+                    aircraft_log = {}
                     diagnostics.event("direct_icao_selection_changed",
                                       previous_icao=selected_id, new_icao=new_id,
                                       pulse_eligible=bool(args.direct and new_id))
@@ -741,6 +824,18 @@ async def run(args):
                                      if clean_hex(item.get("hex")) == selected_id), None)
                     local_read_ms = utc_ms()
                     result = adsb_intake.ingest(feed, aircraft or {}, selected_id, local_read_ms)
+                    if result.observation:
+                        observation = result.observation
+                        altitude_m = (observation.altitude_ellipsoid_m
+                                      if observation.altitude_ellipsoid_m is not None
+                                      else observation.altitude_barometric_m)
+                        aircraft_log = {
+                            "callsign": str((aircraft or {}).get("flight")
+                                            or selection.get("callsign")
+                                            or selected_id).strip(),
+                            "altitude_m": altitude_m,
+                            "vertical_rate_ft_min": observation.vertical_rate_ft_min,
+                        }
                     accepted = bool(result.observation and source.update(result.observation))
                     result.diagnostics["estimator_accepted"] = accepted
                     diagnostics.event("adsb_source_observation", **result.diagnostics)
@@ -801,12 +896,24 @@ async def run(args):
             controller.correct_telemetry(relative_yaw, relative_pitch)
             output = controller.step(target, tick - last_tick)
             last_tick = tick
+            raw_home_pitch = int(round(home_pitch * 10))
+            raw_current_pitch = int(round(measured_pitch * 10))
             pitch = pitch_acquisition.command_for(
-                selected_id if args.direct else None, target.status, tick)
+                selected_id if args.direct else None, target,
+                raw_home_pitch, raw_current_pitch, telemetry_at, tick)
             if pitch.event:
                 event = dict(pitch.event)
-                event.update(raw_pitch=int(round(measured_pitch * 10)),
+                event.update(raw_home_pitch=raw_home_pitch,
+                             raw_current_pitch=raw_current_pitch,
                              measured_pitch_deg=measured_pitch,
+                             target_elevation_deg=target.target_elevation_deg,
+                             camera_home_elevation_deg=camera.home_elevation_deg,
+                             target_pitch_relative_deg=target.target_pitch_relative_deg,
+                             horizontal_range_m=target.horizontal_range_m,
+                             altitude_source=target.altitude_source,
+                             aircraft_altitude_m=aircraft_log.get("altitude_m"),
+                             vertical_rate_ft_min=aircraft_log.get("vertical_rate_ft_min"),
+                             current_pan_command=output.pan_command,
                              bluetooth_state=bluetooth_state)
                 diagnostics.event(event.pop("name"), **event)
             output = apply_pitch_acquisition(output, pitch)
@@ -822,7 +929,9 @@ async def run(args):
                 "effective_write_hz": effective_write_hz(
                     write_count, first_write_at, last_write_at),
                 "last_command": last_command,
-            }, bluetooth_state, optics)
+                "raw_home_pitch": raw_home_pitch,
+                "raw_current_pitch": raw_current_pitch,
+            }, bluetooth_state, optics, camera, aircraft_log, pitch)
             await asyncio.sleep(max(0.0, CONTROL_PERIOD_S - (time.monotonic() - tick)))
     finally:
         # Cleanup is deliberately best-effort and may never replace the first fault.
