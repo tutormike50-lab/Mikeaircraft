@@ -350,11 +350,13 @@ class ControllerV1:
     RS4_PITCH_SIGN = 1
     YAW_DEG_S_PER_COMMAND = 0.063
 
-    def __init__(self, pitch_actuator=None, acquire_kp=1.0, track_kp=0.45,
+    def __init__(self, pitch_actuator=None, acquire_kp=1.0, acquire_kd=0.5,
+                 track_kp=0.45,
                  max_yaw_command=300, capture_cycles=4, stale_ramp_dps2=12.0,
                  max_yaw_accel_dps2=24.0, home_kp=0.65):
         self.pitch_actuator = pitch_actuator or LegacyPitchActuator()
         self.acquire_kp = acquire_kp
+        self.acquire_kd = acquire_kd
         self.track_kp = track_kp
         self.max_yaw_command = max_yaw_command
         self.capture_cycles = capture_cycles
@@ -429,12 +431,15 @@ class ControllerV1:
             if self.inside_cycles >= self.capture_cycles:
                 self.mode = "TRACK"
         kp = self.track_kp if self.mode == "TRACK" else self.acquire_kp
-        yaw_rate = clamp(target.target_yaw_rate_deg_s + kp * yaw_error,
+        position_correction = kp * yaw_error
+        if self.mode == "ACQUIRE":
+            relative_yaw_rate = self.last_yaw_rate - target.target_yaw_rate_deg_s
+            position_correction -= self.acquire_kd * relative_yaw_rate
+            braking_rate = math.sqrt(2.0 * self.max_yaw_accel_dps2 * abs(yaw_error))
+            position_correction = clamp(position_correction, -braking_rate, braking_rate)
+        yaw_rate = clamp(target.target_yaw_rate_deg_s + position_correction,
                          -self.max_yaw_command * self.YAW_DEG_S_PER_COMMAND,
                          self.max_yaw_command * self.YAW_DEG_S_PER_COMMAND)
-        if self.mode == "ACQUIRE":
-            braking_rate = math.sqrt(2.0 * self.max_yaw_accel_dps2 * abs(yaw_error))
-            yaw_rate = clamp(yaw_rate, -braking_rate, braking_rate)
         yaw_rate = self._slew_yaw_rate(yaw_rate, dt_s)
         pan = int(clamp(round(yaw_rate / self.YAW_DEG_S_PER_COMMAND) * self.RS4_YAW_SIGN,
                         -self.max_yaw_command, self.max_yaw_command))

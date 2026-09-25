@@ -129,8 +129,84 @@ class ProductionTrackingTests(unittest.TestCase):
         outputs = [controller.step(target, 0.05) for _ in range(5)]
         rates = [item.requested_yaw_rate_deg_s for item in outputs]
         self.assertTrue(all(right - left <= 1.000001 for left, right in zip(rates, rates[1:])))
-        self.assertTrue(all(abs(rate) <= math.sqrt(40.0 * abs(item.yaw_error_deg)) + 1e-6
+        target_rate = target.target_yaw_rate_deg_s
+        self.assertTrue(all(abs(rate - target_rate) <= math.sqrt(40.0 * abs(item.yaw_error_deg)) + 1e-6
                             for rate, item in zip(rates, outputs)))
+
+    def test_stationary_target_acquire_still_brakes_safely(self):
+        self.source.update(self.observation)
+        target = replace(self.source.latest(self.t0), target_yaw_relative_deg=12.0,
+                         target_yaw_rate_deg_s=0.0)
+        controller = ControllerV1(capture_cycles=1000, max_yaw_accel_dps2=20.0)
+        outputs = []
+        positions = []
+        for _ in range(200):
+            outputs.append(controller.step(target, 0.05))
+            positions.append(controller.estimated_yaw_deg)
+        self.assertTrue(all(abs(item.requested_yaw_rate_deg_s)
+                            <= math.sqrt(40.0 * abs(item.yaw_error_deg)) + 1e-6
+                            for item in outputs))
+        self.assertLessEqual(max(positions), 12.35)
+        self.assertAlmostEqual(positions[-1], 12.0, delta=0.35)
+
+    def test_moving_target_feed_forward_survives_acquire_intercept(self):
+        self.source.update(self.observation)
+        target = replace(self.source.latest(self.t0), target_yaw_relative_deg=0.0,
+                         target_yaw_rate_deg_s=-15.0 / 11.0)
+        controller = ControllerV1(capture_cycles=1000, max_yaw_accel_dps2=24.0)
+        controller.reset_target("abc123")
+        controller.estimated_yaw_deg = 0.0
+        controller.last_yaw_rate = target.target_yaw_rate_deg_s
+        output = controller.step(target, 0.05)
+        self.assertEqual(output.state, "ACQUIRE")
+        self.assertAlmostEqual(output.requested_yaw_rate_deg_s,
+                               target.target_yaw_rate_deg_s, places=9)
+        self.assertNotEqual(output.pan_command, 0)
+
+    def test_acquire_damping_brakes_existing_approach_rate_before_intercept(self):
+        self.source.update(self.observation)
+        target = replace(self.source.latest(self.t0), target_yaw_relative_deg=12.0,
+                         target_yaw_rate_deg_s=-0.2)
+        controller = ControllerV1(capture_cycles=1000, max_yaw_accel_dps2=24.0)
+        controller.reset_target("abc123")
+        controller.last_yaw_rate = 10.0
+        output = controller.step(target, 0.05)
+        self.assertLess(output.requested_yaw_rate_deg_s, 10.0)
+        self.assertAlmostEqual(output.requested_yaw_rate_deg_s, 8.8, places=9)
+
+    def test_predicted_target_tracks_normally(self):
+        self.source.update(self.observation)
+        target = self.source.latest(self.t0 + 1000)
+        self.assertEqual(target.status, "PREDICTED")
+        controller = ControllerV1(capture_cycles=1000)
+        controller.estimated_yaw_deg = target.target_yaw_relative_deg
+        controller.last_yaw_rate = target.target_yaw_rate_deg_s
+        output = controller.step(target, 0.05)
+        self.assertEqual(output.state, "ACQUIRE")
+        self.assertAlmostEqual(output.requested_yaw_rate_deg_s,
+                               target.target_yaw_rate_deg_s, places=9)
+
+    def test_acquire_to_track_has_no_moving_target_rate_pause(self):
+        self.source.update(self.observation)
+        target = replace(self.source.latest(self.t0), target_yaw_relative_deg=0.0,
+                         target_yaw_rate_deg_s=-15.0 / 11.0)
+        controller = ControllerV1(capture_cycles=2, max_yaw_accel_dps2=24.0)
+        controller.reset_target("abc123")
+        controller.last_yaw_rate = target.target_yaw_rate_deg_s
+        outputs = [controller.step(target, 0.05) for _ in range(3)]
+        self.assertEqual([item.state for item in outputs], ["ACQUIRE", "TRACK", "TRACK"])
+        self.assertTrue(all(abs(item.requested_yaw_rate_deg_s) > 1.0 for item in outputs))
+
+    def test_track_numerical_formula_is_unchanged(self):
+        self.source.update(self.observation)
+        target = replace(self.source.latest(self.t0), target_yaw_relative_deg=3.0,
+                         target_yaw_rate_deg_s=-1.2)
+        controller = ControllerV1(max_yaw_accel_dps2=1000.0)
+        controller.reset_target("abc123")
+        controller.mode = "TRACK"
+        output = controller.step(target, 0.05)
+        self.assertAlmostEqual(output.requested_yaw_rate_deg_s,
+                               -1.2 + controller.track_kp * 3.0, places=9)
 
     def test_acquire_settles_to_track_without_shooting_past(self):
         self.source.update(self.observation)
