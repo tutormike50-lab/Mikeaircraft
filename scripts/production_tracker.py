@@ -220,22 +220,44 @@ def observation_from_adsb(aircraft, aircraft_id, source_snapshot_s, local_read_m
     timestamp_ms = round((float(source_snapshot_s) - float(seen_pos)) * 1000)
     if timestamp_ms > local_read_ms + 2000:
         raise ValueError("derived source observation time is materially in the future")
-    altitude = aircraft.get("alt_geom")
-    altitude_source = "ADS_B_GEOMETRIC"
-    if not isinstance(altitude, (int, float)):
-        altitude = None
-        altitude_source = "UNAVAILABLE_BAROMETRIC_NOT_SUBSTITUTED"
+    geometric_altitude = aircraft.get("alt_geom")
+    if (not isinstance(geometric_altitude, (int, float))
+            or isinstance(geometric_altitude, bool)
+            or not math.isfinite(geometric_altitude)):
+        geometric_altitude = None
+    legacy_pressure_altitude = aircraft.get("altitude")
+    if (not isinstance(legacy_pressure_altitude, (int, float))
+            or isinstance(legacy_pressure_altitude, bool)
+            or not math.isfinite(legacy_pressure_altitude)):
+        legacy_pressure_altitude = None
+    if geometric_altitude is not None:
+        altitude_source = "ADS_B_GEOMETRIC"
+        legacy_pressure_altitude = None
+    elif legacy_pressure_altitude is not None:
+        altitude_source = "DUMP1090_LEGACY_PRESSURE_ALTITUDE_APPROXIMATE"
+    else:
+        altitude_source = "UNAVAILABLE"
     vertical_rate = aircraft.get("geom_rate")
-    if not isinstance(vertical_rate, (int, float)):
+    vertical_rate_source = "ADS_B_GEOMETRIC_RATE"
+    if (not isinstance(vertical_rate, (int, float))
+            or isinstance(vertical_rate, bool) or not math.isfinite(vertical_rate)):
+        vertical_rate = aircraft.get("vert_rate")
+        vertical_rate_source = "DUMP1090_LEGACY_BAROMETRIC_RATE"
+    if (not isinstance(vertical_rate, (int, float))
+            or isinstance(vertical_rate, bool) or not math.isfinite(vertical_rate)):
         vertical_rate = None
+        vertical_rate_source = "UNAVAILABLE"
     ground_speed = aircraft.get("gs")
     track = aircraft.get("track")
     return AircraftObservation(aircraft_id, timestamp_ms, float(lat), float(lon),
-                               None if altitude is None else float(altitude) * 0.3048,
+                               None if geometric_altitude is None else float(geometric_altitude) * 0.3048,
                                float(ground_speed) if isinstance(ground_speed, (int, float)) else None,
                                float(track) if isinstance(track, (int, float)) else None,
                                float(vertical_rate) if vertical_rate is not None else None,
-                               altitude_source=altitude_source)
+                               altitude_source=altitude_source,
+                               altitude_barometric_m=(None if legacy_pressure_altitude is None
+                                                       else float(legacy_pressure_altitude) * 0.3048),
+                               vertical_rate_source=vertical_rate_source)
 
 
 class AdsbObservationIntake:
@@ -259,7 +281,9 @@ class AdsbObservationIntake:
         payload = [observation.aircraft_id, observation.timestamp_ms,
                    observation.latitude_deg, observation.longitude_deg,
                    observation.altitude_ellipsoid_m, observation.ground_speed_kt,
-                   observation.track_deg, observation.vertical_rate_ft_min]
+                   observation.track_deg, observation.vertical_rate_ft_min,
+                   observation.altitude_barometric_m, observation.altitude_source,
+                   observation.vertical_rate_source]
         encoded = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()[:20]
 
@@ -278,9 +302,12 @@ class AdsbObservationIntake:
             "latitude_deg": aircraft.get("lat"),
             "longitude_deg": aircraft.get("lon"),
             "altitude_ellipsoid_m": None,
+            "altitude_barometric_m": None,
+            "altitude_source": "UNAVAILABLE",
             "ground_speed_kt": aircraft.get("gs"),
             "track_deg": aircraft.get("track"),
-            "vertical_rate_ft_min": aircraft.get("geom_rate"),
+            "vertical_rate_ft_min": None,
+            "vertical_rate_source": "UNAVAILABLE",
             "duplicate": False,
             "estimator_accepted": False,
         }
@@ -290,7 +317,11 @@ class AdsbObservationIntake:
             base.update(source_snapshot_timestamp_ms=snapshot_ms,
                         source_observation_timestamp_ms=observation.timestamp_ms,
                         source_age_ms=local_read_ms - observation.timestamp_ms,
-                        altitude_ellipsoid_m=observation.altitude_ellipsoid_m)
+                        altitude_ellipsoid_m=observation.altitude_ellipsoid_m,
+                        altitude_barometric_m=observation.altitude_barometric_m,
+                        altitude_source=observation.altitude_source,
+                        vertical_rate_ft_min=observation.vertical_rate_ft_min,
+                        vertical_rate_source=observation.vertical_rate_source)
             if self.last_snapshot_ms is not None and snapshot_ms < self.last_snapshot_ms - 1000:
                 raise ValueError("dump1090 snapshot clock jumped backward")
             identity = self._identity(observation)

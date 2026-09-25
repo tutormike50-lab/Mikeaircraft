@@ -1,4 +1,5 @@
 import asyncio
+import math
 from pathlib import Path
 import sys
 import types
@@ -12,7 +13,7 @@ from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFra
                                 configured_effective_latency_s, effective_write_hz, make_disconnect_callback,
                                 observation_from_adsb, prepare_rs4_gatt,
                                 rs4_protocol_response)  # noqa: E402
-from production_tracking import CameraReference, GeometryTargetSource  # noqa: E402
+from production_tracking import CameraReference, ControllerV1, GeometryTargetSource  # noqa: E402
 
 
 class FakeTx:
@@ -33,19 +34,80 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             configured_effective_latency_s("-0.1")
 
-    def test_only_geometric_altitude_enables_vertical_tracking(self):
+    def test_geometric_altitude_has_precedence_over_legacy_pressure_altitude(self):
         geometric = observation_from_adsb(
             {"lat": 50.0, "lon": 14.0, "seen_pos": 0.5,
-             "alt_geom": 4000, "alt_baro": 3900},
+             "alt_geom": 4000, "altitude": 3900},
             "abc123", 2000.0, 2_000_000)
         self.assertEqual(geometric.altitude_source, "ADS_B_GEOMETRIC")
         self.assertAlmostEqual(geometric.altitude_ellipsoid_m, 1219.2)
+        self.assertIsNone(geometric.altitude_barometric_m)
+
+    def test_legacy_pressure_altitude_and_rate_preserve_units_and_provenance(self):
         barometric = observation_from_adsb(
-            {"lat": 50.0, "lon": 14.0, "seen_pos": 0.5, "alt_baro": 3900},
+            {"lat": 50.0, "lon": 14.0, "seen_pos": 0.5,
+             "altitude": 36000, "vert_rate": -640},
             "abc123", 2000.0, 2_000_000)
         self.assertEqual(barometric.altitude_source,
-                         "UNAVAILABLE_BAROMETRIC_NOT_SUBSTITUTED")
+                         "DUMP1090_LEGACY_PRESSURE_ALTITUDE_APPROXIMATE")
         self.assertIsNone(barometric.altitude_ellipsoid_m)
+        self.assertAlmostEqual(barometric.altitude_barometric_m, 10972.8)
+        self.assertEqual(barometric.vertical_rate_ft_min, -640.0)
+        self.assertEqual(barometric.vertical_rate_source,
+                         "DUMP1090_LEGACY_BAROMETRIC_RATE")
+
+    def test_ground_missing_and_invalid_legacy_altitude_do_not_invent_pitch(self):
+        camera = CameraReference(50.0, 14.0, 360.0, 0.0, 0.0, 1)
+        for value in ("ground", None, float("nan"), float("inf"), True):
+            aircraft = {"lat": 50.1, "lon": 14.0, "seen_pos": 0.1}
+            if value is not None:
+                aircraft["altitude"] = value
+            observation = observation_from_adsb(aircraft, "abc123", 2000.0, 2_000_000)
+            self.assertIsNone(observation.altitude_ellipsoid_m)
+            self.assertIsNone(observation.altitude_barometric_m)
+            source = GeometryTargetSource(camera)
+            self.assertTrue(source.update(observation))
+            target = source.latest(2_000_000)
+            self.assertFalse(target.vertical_valid)
+            self.assertIsNone(target.target_pitch_relative_deg)
+
+    def test_legacy_pressure_altitude_creates_acquisition_pitch_and_tilt(self):
+        camera = CameraReference(50.0, 14.0, 360.0, 0.0, 0.0, 1)
+        # About 15 km north and 10,000 ft pressure altitude.
+        observation = observation_from_adsb(
+            {"lat": 50.1349, "lon": 14.0, "seen_pos": 0.1,
+             "altitude": 10000, "vert_rate": 0},
+            "abc123", 2000.0, 2_000_000)
+        source = GeometryTargetSource(camera)
+        self.assertTrue(source.update(observation))
+        target = source.latest(2_000_000)
+        self.assertTrue(target.vertical_valid)
+        self.assertEqual(target.altitude_source,
+                         "DUMP1090_LEGACY_PRESSURE_ALTITUDE_APPROXIMATE")
+        self.assertIsNotNone(target.target_pitch_relative_deg)
+        output = ControllerV1().step(target, 0.05)
+        self.assertIsNotNone(output.pitch_error_deg)
+        self.assertNotEqual(output.tilt_command, 0)
+
+    def test_representative_datum_error_fits_300mm_vertical_half_frame(self):
+        # A stated 300 m pressure/geoid mismatch at 15 km is 1.146 degrees.
+        # The XA60 16:9 model has a 4.049-degree vertical FOV at 300 mm.
+        datum_error_deg = math.degrees(math.atan2(300.0, 15000.0))
+        sensor_height_35mm_equivalent = math.hypot(36.0, 24.0) * 9.0 / math.hypot(16.0, 9.0)
+        vertical_fov_deg = math.degrees(
+            2.0 * math.atan2(sensor_height_35mm_equivalent, 2.0 * 300.0))
+        self.assertAlmostEqual(datum_error_deg, 1.1458, places=3)
+        self.assertAlmostEqual(vertical_fov_deg, 4.0495, places=3)
+        self.assertLess(datum_error_deg, vertical_fov_deg / 2.0)
+
+    def test_invalid_legacy_vertical_rate_is_rejected(self):
+        for value in ("640", float("nan"), float("inf"), True):
+            observation = observation_from_adsb(
+                {"lat": 50.0, "lon": 14.0, "seen_pos": 0.1,
+                 "altitude": 10000, "vert_rate": value},
+                "abc123", 2000.0, 2_000_000)
+            self.assertIsNone(observation.vertical_rate_ft_min)
+            self.assertEqual(observation.vertical_rate_source, "UNAVAILABLE")
 
     def test_frozen_source_keeps_identity_and_age_without_new_measurement(self):
         intake = AdsbObservationIntake()

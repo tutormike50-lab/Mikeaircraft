@@ -71,6 +71,8 @@ class AircraftObservation:
     position_source: str = "ADS_B"
     altitude_source: str = "ADS_B_GEOMETRIC"
     velocity_source: str = "ADS_B_GROUND_VECTOR"
+    altitude_barometric_m: Optional[float] = None
+    vertical_rate_source: str = "UNAVAILABLE"
 
 
 @dataclass(frozen=True)
@@ -142,9 +144,16 @@ class AircraftStateEstimator:
             camera_height = 0.0
         else:
             camera_height = self.camera.altitude_ellipsoid_m
-        aircraft_height = (observation.altitude_ellipsoid_m
-                           if observation.altitude_ellipsoid_m is not None
-                           else camera_height)
+        # Geometric altitude is datum-compatible with CameraReference.  Legacy
+        # dump1090 ``altitude`` is pressure altitude, so retain it separately
+        # and use it only as an explicitly labelled acquisition approximation.
+        # This deliberately does not relabel pressure altitude as ellipsoid
+        # height; a local pressure/geoid correction is not available here.
+        aircraft_height = observation.altitude_ellipsoid_m
+        if aircraft_height is None:
+            aircraft_height = observation.altitude_barometric_m
+        if aircraft_height is None:
+            aircraft_height = camera_height
 
         def ecef(latitude_deg, longitude_deg, height_m):
             latitude = math.radians(latitude_deg)
@@ -167,7 +176,8 @@ class AircraftStateEstimator:
         up_value = (math.cos(latitude) * math.cos(longitude) * dx
                     + math.cos(latitude) * math.sin(longitude) * dy
                     + math.sin(latitude) * dz)
-        vertical_compatible = (observation.altitude_ellipsoid_m is not None
+        vertical_compatible = ((observation.altitude_ellipsoid_m is not None
+                                or observation.altitude_barometric_m is not None)
                                and self.camera.altitude_ellipsoid_m is not None)
         return east, north, up_value if vertical_compatible else None
 
