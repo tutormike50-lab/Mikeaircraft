@@ -19,6 +19,19 @@ def target(pitch, status="VALID", vertical_valid=True):
 
 
 class AltitudePitchAcquisitionTests(unittest.TestCase):
+    def test_physical_pitch_wraps_across_positive_to_negative_boundary(self):
+        self.assertAlmostEqual(
+            AltitudePitchAcquisition.physical_pitch(1797, -1787), -1.6)
+
+    def test_physical_pitch_wraps_across_negative_to_positive_boundary(self):
+        self.assertAlmostEqual(
+            AltitudePitchAcquisition.physical_pitch(-1787, 1797), 1.6)
+
+    def test_physical_pitch_non_wrap_cases_are_unchanged(self):
+        self.assertEqual(AltitudePitchAcquisition.physical_pitch(1780, 1730), 5.0)
+        self.assertEqual(AltitudePitchAcquisition.physical_pitch(1730, 1780), -5.0)
+        self.assertEqual(AltitudePitchAcquisition.physical_pitch(0, 0), 0.0)
+
     def test_physical_pitch_sign_and_direct_target_contract(self):
         acquire = AltitudePitchAcquisition()
         decision = acquire.command_for("abc123", target(6.0), 1780, 1730, 1.0, 1.0)

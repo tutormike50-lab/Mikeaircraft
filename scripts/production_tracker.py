@@ -232,7 +232,9 @@ def observation_from_adsb(aircraft, aircraft_id, source_snapshot_s, local_read_m
             or isinstance(geometric_altitude, bool)
             or not math.isfinite(geometric_altitude)):
         geometric_altitude = None
-    legacy_pressure_altitude = aircraft.get("altitude")
+    legacy_pressure_altitude = aircraft.get("alt_baro")
+    if legacy_pressure_altitude is None:
+        legacy_pressure_altitude = aircraft.get("altitude")
     if (not isinstance(legacy_pressure_altitude, (int, float))
             or isinstance(legacy_pressure_altitude, bool)
             or not math.isfinite(legacy_pressure_altitude)):
@@ -408,7 +410,7 @@ class AltitudePitchAcquisition:
         if not all(isinstance(value, (int, float)) and not isinstance(value, bool)
                    and math.isfinite(value) for value in values):
             return None
-        return (float(raw_home_pitch) - float(raw_current_pitch)) / 10.0
+        return wrap180((float(raw_home_pitch) - float(raw_current_pitch)) / 10.0)
 
     @staticmethod
     def pulse_duration(error_deg):

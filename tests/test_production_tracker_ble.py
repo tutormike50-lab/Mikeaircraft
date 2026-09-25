@@ -56,6 +56,40 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(barometric.vertical_rate_source,
                          "DUMP1090_LEGACY_BAROMETRIC_RATE")
 
+    def test_common_dump1090_barometric_altitude_creates_pitch_target(self):
+        camera = CameraReference(50.0, 14.0, 360.0, 0.0, 0.0, 1)
+        observation = observation_from_adsb(
+            {"hex": "48c127", "flight": "RYR80WD ",
+             "lat": 50.1349, "lon": 14.0, "seen_pos": 0.1,
+             "alt_baro": 10000, "baro_rate": -640},
+            "48c127", 2000.0, 2_000_000)
+        source = GeometryTargetSource(camera)
+        self.assertTrue(source.update(observation))
+        target = source.latest(2_000_000)
+
+        self.assertEqual(observation.altitude_source,
+                         "DUMP1090_LEGACY_PRESSURE_ALTITUDE_APPROXIMATE")
+        self.assertAlmostEqual(observation.altitude_barometric_m, 3048.0)
+        self.assertTrue(target.vertical_valid)
+        self.assertIsNotNone(target.target_elevation_deg)
+        self.assertIsNotNone(target.target_pitch_relative_deg)
+
+    def test_common_dump1090_missing_altitude_remains_unavailable(self):
+        observation = observation_from_adsb(
+            {"hex": "48c127", "flight": "RYR80WD ",
+             "lat": 50.1349, "lon": 14.0, "seen_pos": 0.1},
+            "48c127", 2000.0, 2_000_000)
+        source = GeometryTargetSource(
+            CameraReference(50.0, 14.0, 360.0, 0.0, 0.0, 1))
+        self.assertTrue(source.update(observation))
+        target = source.latest(2_000_000)
+
+        self.assertEqual(observation.altitude_source, "UNAVAILABLE")
+        self.assertIsNone(observation.altitude_barometric_m)
+        self.assertFalse(target.vertical_valid)
+        self.assertIsNone(target.target_elevation_deg)
+        self.assertIsNone(target.target_pitch_relative_deg)
+
     def test_ground_missing_and_invalid_legacy_altitude_do_not_invent_pitch(self):
         camera = CameraReference(50.0, 14.0, 360.0, 0.0, 0.0, 1)
         for value in ("ground", None, float("nan"), float("inf"), True):
