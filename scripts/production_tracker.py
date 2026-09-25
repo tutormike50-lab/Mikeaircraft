@@ -33,7 +33,9 @@ CONTROL_PERIOD_S = 0.05
 ADS_B_POLL_S = 0.20
 TELEMETRY_MAX_AGE_S = 2.0
 RS4_YAW_SIGN = 1
-RS4_PITCH_SIGN = 1
+# The RS4 command axis is opposite to MikeAircraft's physical convention:
+# logical +pitch is lens UP, while a positive packet tilt moves this rig DOWN.
+RS4_PITCH_SIGN = -1
 PITCH_ACQUIRE_COMMAND = 25
 PITCH_ACQUIRE_DURATION_S = 0.50
 PITCH_ACQUIRE_COMMAND_BUDGET = 10
@@ -91,6 +93,17 @@ class DjiFrameDecoder:
             del self.buffer[:size]
             frames.append(frame)
         return frames
+
+
+def physical_pitch_relative_deg(measured_pitch_deg, home_pitch_deg):
+    """Normalize RS4 telemetry to level=0, lens UP=positive, DOWN=negative."""
+    # RS4 telemetry decreases when the lens physically moves up.
+    return -wrap180(measured_pitch_deg - home_pitch_deg)
+
+
+def rs4_tilt_command(logical_pitch_command):
+    """Convert logical physical pitch direction at the one hardware boundary."""
+    return logical_pitch_command * RS4_PITCH_SIGN
 
 
 def rs4_protocol_response(frame):
@@ -736,7 +749,7 @@ async def run(args):
                 await stop_motion()
                 raise RuntimeError("RS4 telemetry stale; tracking stopped")
             relative_yaw = wrap180(measured_yaw - home_yaw)
-            relative_pitch = -wrap180(measured_pitch - home_pitch)
+            relative_pitch = physical_pitch_relative_deg(measured_pitch, home_pitch)
             controller.correct_telemetry(relative_yaw, relative_pitch)
             output = controller.step(target, tick - last_tick)
             last_tick = tick
@@ -746,7 +759,7 @@ async def run(args):
                 event = dict(pitch.event)
                 diagnostics.event(event.pop("name"), **event)
             output = replace(output, tilt_command=pitch.command)
-            await send_axes(output.tilt_command * RS4_PITCH_SIGN,
+            await send_axes(rs4_tilt_command(output.tilt_command),
                             output.pan_command * RS4_YAW_SIGN)
             diagnostics.write(target, output, {
                 "estimated_yaw": controller.estimated_yaw_deg,

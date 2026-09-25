@@ -1,12 +1,42 @@
+import importlib.util
 from pathlib import Path
 import sys
+import types
 import unittest
+from unittest import mock
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from production_tracker import (PITCH_ACQUIRE_COMMAND, OneShotPitchAcquisition)  # noqa: E402
+from production_tracker import (  # noqa: E402
+    PITCH_ACQUIRE_COMMAND,
+    OneShotPitchAcquisition,
+    physical_pitch_relative_deg,
+    rs4_tilt_command,
+)
+from production_tracking import ControllerV1, GeometryTarget  # noqa: E402
+
+
+def packet(seq, tilt, pan):
+    spec = importlib.util.spec_from_file_location(
+        "_pitch_packet_fixture", SCRIPTS / "virtual_hill_tracker.py")
+    module = importlib.util.module_from_spec(spec)
+    with mock.patch.dict(sys.modules, {"bleak": types.SimpleNamespace(BleakClient=object)}):
+        spec.loader.exec_module(module)
+    return module.packet(seq, tilt, pan)
+
+
+def target(pitch_deg):
+    return GeometryTarget(
+        timestamp_ms=0, aircraft_id="abc123", target_true_azimuth_deg=0.0,
+        target_elevation_deg=pitch_deg, target_yaw_relative_deg=0.0,
+        target_pitch_relative_deg=pitch_deg, target_yaw_rate_deg_s=0.0,
+        target_pitch_rate_deg_s=0.0, aircraft_state_timestamp_ms=0,
+        aim_timestamp_ms=0, source_age_ms=0, prediction_age_ms=0,
+        horizontal_range_m=1000.0, slant_range_m=1000.0,
+        position_source="TEST", altitude_source="TEST", velocity_source="TEST",
+        horizontal_valid=True, vertical_valid=True, status="VALID")
 
 
 class OneShotPitchAcquisitionTests(unittest.TestCase):
@@ -57,6 +87,32 @@ class OneShotPitchAcquisitionTests(unittest.TestCase):
         self.assertEqual(stopped.event["name"], "PITCH_ACQUIRE_DONE")
         self.assertEqual(stopped.event["completion"], "TARGET_STALE")
         self.assertEqual(pulse.command_for("abc123", "VALID", 0.1).command, 0)
+
+
+class PitchSignPathTests(unittest.TestCase):
+    def test_raw_telemetry_is_normalized_to_physical_pitch(self):
+        self.assertEqual(physical_pitch_relative_deg(8.0, 10.0), 2.0)
+        self.assertEqual(physical_pitch_relative_deg(12.0, 10.0), -2.0)
+        self.assertEqual(physical_pitch_relative_deg(10.0, 10.0), 0.0)
+
+    def test_logical_pitch_uses_one_opposite_hardware_conversion(self):
+        self.assertEqual(rs4_tilt_command(25), -25)
+        self.assertEqual(rs4_tilt_command(-25), 25)
+        self.assertEqual(rs4_tilt_command(0), 0)
+
+    def test_controller_up_demand_reaches_up_hardware_value(self):
+        controller = ControllerV1()
+        controller.reset_target("abc123")
+        output = controller.step(target(2.0), 0.05)
+        self.assertGreater(output.tilt_command, 0)
+        self.assertLess(rs4_tilt_command(output.tilt_command), 0)
+
+    def test_packet_keeps_tilt_and_pan_in_distinct_signed_int16_fields(self):
+        import struct
+
+        encoded = packet(0x1234, rs4_tilt_command(25), 7)
+        tilt_field, roll_field, pan_field = struct.unpack_from("<hhh", encoded, 11)
+        self.assertEqual((tilt_field, roll_field, pan_field), (999, 1024, 1031))
 
 
 if __name__ == "__main__":
