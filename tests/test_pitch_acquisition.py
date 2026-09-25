@@ -100,6 +100,8 @@ class AltitudePitchAcquisitionTests(unittest.TestCase):
         invalid = AltitudePitchAcquisition().command_for(
             "abc123", target(None, vertical_valid=False), 1780, 1780, 1.0, 1.0)
         self.assertEqual(invalid.reason, "TARGET_INVALID")
+        self.assertEqual(invalid.state, "READY")
+        self.assertEqual(invalid.command, 0)
         stale = AltitudePitchAcquisition().command_for(
             "abc123", target(5.0), 1780, 1780, 1.0, 3.51)
         self.assertEqual(stale.reason, "STALE_TELEMETRY")
@@ -110,6 +112,17 @@ class AltitudePitchAcquisitionTests(unittest.TestCase):
         budget = AltitudePitchAcquisition(cumulative_limit_s=.39)
         self.assertEqual(budget.command_for(
             "abc123", target(5.0), 1780, 1780, 1.0, 1.0).reason, "TIMEOUT")
+
+    def test_missing_altitude_does_not_latch_before_later_valid_target(self):
+        acquire = AltitudePitchAcquisition()
+        missing = acquire.command_for(
+            "abc123", target(None, vertical_valid=False), 1780, 1780, 1.0, 1.0)
+        recovered = acquire.command_for(
+            "abc123", target(6.0), 1780, 1780, 1.1, 1.1)
+
+        self.assertEqual((missing.command, missing.state, missing.reason),
+                         (0, "READY", "TARGET_INVALID"))
+        self.assertEqual((recovered.command, recovered.state), (100, "ACQUIRE"))
 
     def test_pan_output_is_identical_during_pulse_and_neutral(self):
         baseline = ControllerOutput("TRACK", 3.5, -1.25, 2.0, -1.0, -73, 18)

@@ -442,7 +442,12 @@ class AltitudePitchAcquisition:
                                         physical, error)
         if (getattr(target, "status", None) not in self.SAFE_TARGET_STATUSES
                 or not getattr(target, "vertical_valid", False) or error is None):
-            return self._finish("ABORT", "TARGET_INVALID", physical, error)
+            # dump1090 may publish a selected aircraft's position before its
+            # pressure altitude. Zero tilt is mandatory while vertical data
+            # is unavailable, but that transient must not permanently latch
+            # acquisition before a later complete record arrives.
+            return PitchAcquireDecision(0, "READY", "TARGET_INVALID", 0.0,
+                                        physical, error)
         if desired < -PITCH_FENCE_DEG or desired > PITCH_FENCE_DEG:
             return self._finish("ABORT", "TARGET_OUTSIDE_PITCH_FENCE", physical, error)
         if telemetry_at is None or now_s - telemetry_at > self.stale_s:
