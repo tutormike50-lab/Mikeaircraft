@@ -525,7 +525,10 @@ async def run(args):
     from tower_joystick_v1 import load_controller
     import virtual_hill_local as local
 
-    controller_directory = Path(__file__).resolve().parents[1] / "tests" / "calibration_test_fixtures"
+    # Match tower_joystick_v1's proven Pi default. This directory contains the
+    # six hash-pinned controller files physically used by V2.
+    controller_directory = Path(
+        os.environ.get("MIKEAIRCRAFT_V2_CONTROLLER_DIR", "/home/mike"))
     lead = load_controller(controller_directory)
     stable = lead.stable
     ble = stable.geom.base
