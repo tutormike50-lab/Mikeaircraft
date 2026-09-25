@@ -18,6 +18,7 @@ import math
 import os
 from pathlib import Path
 import struct
+import sys
 import time
 import traceback
 import urllib.request
@@ -603,12 +604,15 @@ class Diagnostics:
 
 async def run(args):
     # Imported only after explicit movement confirmation, so --check cannot touch BLE.
-    from tower_joystick_v1 import load_controller
+    from tower_joystick_v1 import EXPECTED_SHA256, load_controller, verify_sources
 
     # Match tower_joystick_v1's proven Pi default. This directory contains the
     # six hash-pinned controller files physically used by V2.
     controller_directory = Path(
         os.environ.get("MIKEAIRCRAFT_V2_CONTROLLER_DIR", "/home/mike"))
+    verify_sources(controller_directory)
+    for filename in EXPECTED_SHA256:
+        sys.modules.pop(Path(filename).stem, None)
     lead = load_controller(controller_directory)
     import virtual_hill_local as local
     stable = lead.stable
