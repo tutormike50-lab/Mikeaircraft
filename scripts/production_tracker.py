@@ -10,7 +10,7 @@ modified.
 import argparse
 import asyncio
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -34,6 +34,9 @@ ADS_B_POLL_S = 0.20
 TELEMETRY_MAX_AGE_S = 2.0
 RS4_YAW_SIGN = 1
 RS4_PITCH_SIGN = 1
+PITCH_ACQUIRE_COMMAND = -25
+PITCH_ACQUIRE_DURATION_S = 0.50
+PITCH_ACQUIRE_COMMAND_BUDGET = 10
 
 RS4_PROTOCOL_REQUESTS = {
     (0x04, 0x02, 0x00, 0x04, 0x38),
@@ -343,6 +346,93 @@ class AdsbObservationIntake:
             return AdsbIntakeResult(None, base, False)
 
 
+@dataclass(frozen=True)
+class PitchAcquireDecision:
+    command: int
+    event: object = None
+
+
+class OneShotPitchAcquisition:
+    """One bounded UP pulse for each never-before-seen Direct Tracker ICAO."""
+
+    SAFE_TARGET_STATUSES = {"VALID", "PREDICTED"}
+
+    def __init__(self, command=PITCH_ACQUIRE_COMMAND,
+                 duration_s=PITCH_ACQUIRE_DURATION_S,
+                 command_budget=PITCH_ACQUIRE_COMMAND_BUDGET):
+        if command >= 0:
+            raise ValueError("pitch acquisition command must oppose b72738c's positive/down motion")
+        if duration_s <= 0 or command_budget <= 0:
+            raise ValueError("pitch acquisition budgets must be positive")
+        self.command = int(command)
+        self.duration_s = float(duration_s)
+        self.command_budget = int(command_budget)
+        self.seen_aircraft = set()
+        self.selected_id = None
+        self.armed_id = None
+        self.started_at = None
+        self.commands_sent = 0
+
+    def select(self, aircraft_id):
+        if aircraft_id == self.selected_id:
+            return
+        self.selected_id = aircraft_id
+        self.started_at = None
+        self.commands_sent = 0
+        if aircraft_id and aircraft_id not in self.seen_aircraft:
+            self.seen_aircraft.add(aircraft_id)
+            self.armed_id = aircraft_id
+        else:
+            self.armed_id = None
+
+    def command_for(self, aircraft_id, target_status, now_s):
+        if aircraft_id != self.selected_id and self.started_at is not None:
+            finished = self._finish(now_s, "SELECTION_CHANGED")
+            self.select(aircraft_id)
+            return finished
+        self.select(aircraft_id)
+        if not aircraft_id or target_status not in self.SAFE_TARGET_STATUSES:
+            if self.started_at is not None:
+                return self._finish(now_s, f"TARGET_{target_status}")
+            return PitchAcquireDecision(0)
+        if self.armed_id != aircraft_id:
+            return PitchAcquireDecision(0)
+        if self.started_at is None:
+            self.started_at = now_s
+            start = {
+                "name": "PITCH_ACQUIRE_START",
+                "selected_icao": aircraft_id,
+                "commanded_direction": "UP_OPPOSITE_B72738C_DOWN",
+                "pulse_command": self.command,
+                "duration_budget_s": self.duration_s,
+                "command_budget": self.command_budget,
+            }
+        else:
+            start = None
+        elapsed = max(0.0, now_s - self.started_at)
+        if elapsed >= self.duration_s or self.commands_sent >= self.command_budget:
+            return self._finish(now_s, "BUDGET_COMPLETE")
+        self.commands_sent += 1
+        return PitchAcquireDecision(self.command, start)
+
+    def _finish(self, now_s, reason):
+        elapsed = max(0.0, now_s - self.started_at)
+        event = {
+            "name": "PITCH_ACQUIRE_DONE",
+            "selected_icao": self.armed_id,
+            "commanded_direction": "UP_OPPOSITE_B72738C_DOWN",
+            "pulse_command": self.command,
+            "elapsed_s": elapsed,
+            "duration_budget_s": self.duration_s,
+            "commands_sent": self.commands_sent,
+            "command_budget": self.command_budget,
+            "completion": reason,
+        }
+        self.armed_id = None
+        self.started_at = None
+        return PitchAcquireDecision(0, event)
+
+
 def configured_effective_latency_s(value=None):
     raw = value if value is not None else os.environ.get("MIKEAIRCRAFT_EFFECTIVE_LATENCY_S", "0.25")
     latency = float(raw)
@@ -454,6 +544,7 @@ async def run(args):
     protocol_responses = asyncio.Queue()
     protocol_response_count = 0
     write_lock = asyncio.Lock()
+    pitch_acquisition = OneShotPitchAcquisition()
 
     def record_disconnect(disconnected_client, occurred_at):
         nonlocal bluetooth_state, disconnected_at, disconnect_state
@@ -649,6 +740,12 @@ async def run(args):
             controller.correct_telemetry(relative_yaw, relative_pitch)
             output = controller.step(target, tick - last_tick)
             last_tick = tick
+            pitch = pitch_acquisition.command_for(
+                selected_id if args.direct else None, target.status, tick)
+            if pitch.event:
+                event = dict(pitch.event)
+                diagnostics.event(event.pop("name"), **event)
+            output = replace(output, tilt_command=pitch.command)
             await send_axes(output.tilt_command * RS4_PITCH_SIGN,
                             output.pan_command * RS4_YAW_SIGN)
             diagnostics.write(target, output, {
