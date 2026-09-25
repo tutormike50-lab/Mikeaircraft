@@ -34,9 +34,9 @@ ADS_B_POLL_S = 0.20
 TELEMETRY_MAX_AGE_S = 2.0
 RS4_YAW_SIGN = 1
 RS4_PITCH_SIGN = 1
-PITCH_ACQUIRE_COMMAND = -25
-PITCH_ACQUIRE_DURATION_S = 0.50
-PITCH_ACQUIRE_COMMAND_BUDGET = 10
+PITCH_ACQUIRE_COMMAND = 100
+PITCH_ACQUIRE_DURATION_S = 2.0
+PITCH_ACQUIRE_COMMAND_BUDGET = 40
 
 RS4_PROTOCOL_REQUESTS = {
     (0x04, 0x02, 0x00, 0x04, 0x38),
@@ -360,8 +360,10 @@ class OneShotPitchAcquisition:
     def __init__(self, command=PITCH_ACQUIRE_COMMAND,
                  duration_s=PITCH_ACQUIRE_DURATION_S,
                  command_budget=PITCH_ACQUIRE_COMMAND_BUDGET):
-        if command >= 0:
-            raise ValueError("pitch acquisition command must oppose b72738c's positive/down motion")
+        if command != 100:
+            raise ValueError("the physically proven acquisition command is +100")
+        if duration_s > 2.0:
+            raise ValueError("pitch acquisition duration cannot exceed 2.0 seconds")
         if duration_s <= 0 or command_budget <= 0:
             raise ValueError("pitch acquisition budgets must be positive")
         self.command = int(command)
@@ -402,7 +404,7 @@ class OneShotPitchAcquisition:
             start = {
                 "name": "PITCH_ACQUIRE_START",
                 "selected_icao": aircraft_id,
-                "commanded_direction": "UP_OPPOSITE_B72738C_DOWN",
+                "commanded_direction": "PHYSICAL_UP_PROVEN_V2",
                 "pulse_command": self.command,
                 "duration_budget_s": self.duration_s,
                 "command_budget": self.command_budget,
@@ -420,7 +422,7 @@ class OneShotPitchAcquisition:
         event = {
             "name": "PITCH_ACQUIRE_DONE",
             "selected_icao": self.armed_id,
-            "commanded_direction": "UP_OPPOSITE_B72738C_DOWN",
+            "commanded_direction": "PHYSICAL_UP_PROVEN_V2",
             "pulse_command": self.command,
             "elapsed_s": elapsed,
             "duration_budget_s": self.duration_s,
@@ -431,6 +433,16 @@ class OneShotPitchAcquisition:
         self.armed_id = None
         self.started_at = None
         return PitchAcquireDecision(0, event)
+
+
+def apply_pitch_acquisition(controller_output, decision):
+    """Override only tilt; the b72738c pan output remains byte-for-byte numeric."""
+    return replace(controller_output, tilt_command=decision.command)
+
+
+def build_joystick_frame(packet_builder, sequence, tilt, pan):
+    """Keep both axes in the single proven DJI virtual-joystick frame."""
+    return packet_builder(sequence, tilt, pan)
 
 
 def configured_effective_latency_s(value=None):
@@ -510,9 +522,13 @@ class Diagnostics:
 
 async def run(args):
     # Imported only after explicit movement confirmation, so --check cannot touch BLE.
-    from bleak import BleakClient
+    from tower_joystick_v1 import load_controller
     import virtual_hill_local as local
-    import virtual_hill_tracker as ble
+
+    controller_directory = Path(__file__).resolve().parents[1] / "tests" / "calibration_test_fixtures"
+    lead = load_controller(controller_directory)
+    stable = lead.stable
+    ble = stable.geom.base
 
     camera = await asyncio.to_thread(load_camera_reference, args.camera_reference_url, args.pin)
     try:
@@ -612,7 +628,8 @@ async def run(args):
             async with write_lock:
                 await asyncio.wait_for(
                     client.write_gatt_char(
-                        tx_char, ble.packet(sequence, tilt, pan), response=False), 2.0)
+                        tx_char, build_joystick_frame(ble.packet, sequence, tilt, pan),
+                        response=False), 2.0)
             written_at = time.monotonic()
             if first_write_at is None:
                 first_write_at = written_at
@@ -638,12 +655,50 @@ async def run(args):
                 await send_axes(0, 0)
             await asyncio.sleep(0.04)
 
+    async def emergency_stop():
+        """V2-style best-effort neutral, including one STOP-only reconnect."""
+        nonlocal sequence
+        if client_connected(client) and disconnected_at is None and tx_char is not None:
+            await stop_motion()
+            diagnostics.event("forced_neutral_stop", delivery="active_connection",
+                              tilt_command=0, pan_command=0, bluetooth_state=bluetooth_state)
+            return
+        recovery = None
+        try:
+            recovery = stable.BleakClient(ble.DEVICE, timeout=4)
+            await asyncio.wait_for(recovery.connect(), 4)
+            stop_tx = recovery.services.get_characteristic(ble.TX)
+            if stop_tx is None:
+                raise RuntimeError("RS4 STOP characteristic not found")
+            for _ in range(5):
+                sequence = (sequence + 1) & 0xFFFF
+                await asyncio.wait_for(recovery.write_gatt_char(
+                    stop_tx, build_joystick_frame(ble.packet, sequence, 0, 0),
+                    response=False), 0.5)
+                await asyncio.sleep(0.04)
+            diagnostics.event("forced_neutral_stop", delivery="stop_only_reconnect",
+                              tilt_command=0, pan_command=0, bluetooth_state=bluetooth_state)
+        except Exception as error:
+            diagnostics.event("forced_neutral_stop_failed", tilt_command=0, pan_command=0,
+                              bluetooth_state=bluetooth_state,
+                              exception_type=type(error).__name__, exception=str(error))
+        finally:
+            if recovery is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(recovery.disconnect(), 2)
+
     async def connect():
         nonlocal client, tx_char, home_yaw, home_pitch, bluetooth_state, connected_at
         bluetooth_state = "CONNECTING"
-        client = BleakClient(ble.DEVICE, timeout=20, disconnected_callback=disconnected)
+        client = stable.BleakClient(ble.DEVICE, timeout=20, disconnected_callback=disconnected)
         await asyncio.wait_for(client.connect(), 25)
-        tx_char = await prepare_rs4_gatt(client, ble, receive)
+        tx_char = client.services.get_characteristic(ble.TX)
+        if tx_char is None:
+            raise RuntimeError("RS4 TX characteristic not found")
+        # Preserve the physically proven tower_joystick_v1 lifecycle: resolve
+        # TX, issue repeated neutral frames, then establish notifications.
+        await stop_motion()
+        await asyncio.wait_for(client.start_notify(ble.RX, receive), 6)
         deadline = time.monotonic() + 5
         while measured_yaw is None and time.monotonic() < deadline:
             await asyncio.sleep(0.05)
@@ -671,6 +726,9 @@ async def run(args):
                     selection = current_selection(engine)
                 new_id = selection and selection["aircraft_id"]
                 if new_id != selected_id:
+                    diagnostics.event("direct_icao_selection_changed",
+                                      previous_icao=selected_id, new_icao=new_id,
+                                      pulse_eligible=bool(args.direct and new_id))
                     selected_id = new_id
                     source.select_aircraft(new_id)
                     adsb_intake.select_aircraft(new_id)
@@ -744,8 +802,11 @@ async def run(args):
                 selected_id if args.direct else None, target.status, tick)
             if pitch.event:
                 event = dict(pitch.event)
+                event.update(raw_pitch=int(round(measured_pitch * 10)),
+                             measured_pitch_deg=measured_pitch,
+                             bluetooth_state=bluetooth_state)
                 diagnostics.event(event.pop("name"), **event)
-            output = replace(output, tilt_command=pitch.command)
+            output = apply_pitch_acquisition(output, pitch)
             await send_axes(output.tilt_command * RS4_PITCH_SIGN,
                             output.pan_command * RS4_YAW_SIGN)
             diagnostics.write(target, output, {
@@ -775,7 +836,7 @@ async def run(args):
             with contextlib.suppress(asyncio.CancelledError):
                 await responder
         with contextlib.suppress(Exception):
-            await stop_motion()
+            await emergency_stop()
         if client is not None:
             intentional_disconnect = True
             with contextlib.suppress(Exception):
