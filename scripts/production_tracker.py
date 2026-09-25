@@ -389,6 +389,7 @@ class Diagnostics:
             "requested_pitch_rate_deg_s": output.requested_pitch_rate_deg_s,
             "final_rs4_pan_command": output.pan_command,
             "final_rs4_tilt_command": output.tilt_command,
+            "pitch_acquire_diagnostic": getattr(output, "pitch_acquire_diagnostic", None),
             "bluetooth_state": bluetooth_state,
             "camera_optics": optics_fields,
             "slider_position": optics.slider_position_0_1,

@@ -231,6 +231,64 @@ class ProductionTrackingTests(unittest.TestCase):
         target = self.source.latest(self.t0 + 1000)
         self.assertGreater(target.target_yaw_rate_deg_s, 0.0)
 
+    def test_pitch_acquisition_is_finite_then_holds_zero_for_same_aircraft(self):
+        self.source.update(self.observation)
+        target = replace(self.source.latest(self.t0), target_pitch_relative_deg=8.0,
+                         vertical_valid=True)
+        controller = ControllerV1()
+        outputs = [controller.step(target, 0.05) for _ in range(50)]
+        nonzero = [item for item in outputs if item.tilt_command]
+        self.assertEqual(len(nonzero), controller.PITCH_ACQUIRE_COMMAND_BUDGET)
+        self.assertTrue(all(abs(item.tilt_command) == controller.PITCH_ACQUIRE_COMMAND
+                            for item in nonzero))
+        self.assertTrue(all(item.tilt_command == 0 for item in outputs[20:]))
+        self.assertEqual(outputs[20].pitch_acquire_diagnostic,
+                         "PITCH_ACQUIRE_LIMIT_TIMEOUT")
+
+    def test_pitch_fence_stops_independently_and_leaves_yaw_alive(self):
+        self.source.update(self.observation)
+        target = replace(self.source.latest(self.t0), target_pitch_relative_deg=30.0,
+                         vertical_valid=True)
+        controller = ControllerV1()
+        controller.estimated_pitch_deg = controller.PITCH_ACQUIRE_FENCE_DEG
+        output = controller.step(target, 0.05)
+        self.assertEqual(output.tilt_command, 0)
+        self.assertNotEqual(output.pan_command, 0)
+        self.assertEqual(output.pitch_acquire_diagnostic, "PITCH_ACQUIRE_LIMIT_FENCE")
+
+    def test_stale_invalid_and_home_always_zero_pitch_and_cancel_acquisition(self):
+        self.source.update(self.observation)
+        target = replace(self.source.latest(self.t0), target_pitch_relative_deg=8.0,
+                         vertical_valid=True)
+        for replacement in (
+                replace(target, status="STALE"),
+                replace(target, status="INVALID"),
+                GeometryTargetSource(self.camera).latest(self.t0)):
+            controller = ControllerV1()
+            controller.reset_target("abc123")
+            output = controller.step(replacement, 0.05)
+            self.assertEqual(output.tilt_command, 0)
+
+    def test_completed_pitch_does_not_restart_without_new_aircraft(self):
+        self.source.update(self.observation)
+        target = replace(self.source.latest(self.t0), target_pitch_relative_deg=0.2,
+                         vertical_valid=True)
+        controller = ControllerV1()
+        first = controller.step(target, 0.05)
+        changed = replace(target, target_pitch_relative_deg=10.0)
+        later = [controller.step(changed, 0.05) for _ in range(30)]
+        self.assertEqual(first.tilt_command, 0)
+        self.assertTrue(all(item.tilt_command == 0 for item in later))
+
+    def test_pitch_timeout_cannot_be_overshot_by_a_long_control_tick(self):
+        self.source.update(self.observation)
+        target = replace(self.source.latest(self.t0), target_pitch_relative_deg=8.0,
+                         vertical_valid=True)
+        controller = ControllerV1()
+        outputs = [controller.step(target, 0.24) for _ in range(8)]
+        self.assertEqual(sum(0.24 for item in outputs if item.tilt_command), 0.96)
+        self.assertTrue(all(item.tilt_command == 0 for item in outputs[4:]))
+
 
 if __name__ == "__main__":
     unittest.main()

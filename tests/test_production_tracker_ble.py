@@ -71,7 +71,7 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(target.vertical_valid)
             self.assertIsNone(target.target_pitch_relative_deg)
 
-    def test_legacy_pressure_altitude_creates_acquisition_pitch_and_tilt(self):
+    def test_legacy_pressure_altitude_creates_bounded_acquisition_pitch_and_tilt(self):
         camera = CameraReference(50.0, 14.0, 360.0, 0.0, 0.0, 1)
         # About 15 km north and 10,000 ft pressure altitude.
         observation = observation_from_adsb(
@@ -88,6 +88,7 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
         output = ControllerV1().step(target, 0.05)
         self.assertIsNotNone(output.pitch_error_deg)
         self.assertNotEqual(output.tilt_command, 0)
+        self.assertLessEqual(abs(output.tilt_command), ControllerV1.PITCH_ACQUIRE_COMMAND)
 
     def test_representative_datum_error_fits_300mm_vertical_half_frame(self):
         # A stated 300 m pressure/geoid mismatch at 15 km is 1.146 degrees.

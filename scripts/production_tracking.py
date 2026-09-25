@@ -341,6 +341,7 @@ class ControllerOutput:
     requested_pitch_rate_deg_s: float
     pan_command: int
     tilt_command: int
+    pitch_acquire_diagnostic: Optional[str] = None
 
 
 class LegacyPitchActuator:
@@ -359,6 +360,10 @@ class ControllerV1:
     RS4_YAW_SIGN = 1
     RS4_PITCH_SIGN = 1
     YAW_DEG_S_PER_COMMAND = 0.063
+    PITCH_ACQUIRE_FENCE_DEG = 12.0
+    PITCH_ACQUIRE_COMMAND = 25
+    PITCH_ACQUIRE_TIMEOUT_S = 1.0
+    PITCH_ACQUIRE_COMMAND_BUDGET = 20
 
     def __init__(self, pitch_actuator=None, acquire_kp=1.0, acquire_kd=0.5,
                  track_kp=0.45,
@@ -379,12 +384,70 @@ class ControllerV1:
         self.estimated_pitch_deg = 0.0
         self.last_yaw_rate = 0.0
         self.inside_cycles = 0
+        self.pitch_acquire_armed = False
+        self.pitch_acquire_active = False
+        self.pitch_acquire_target_deg = None
+        self.pitch_acquire_direction = 0
+        self.pitch_acquire_elapsed_s = 0.0
+        self.pitch_acquire_commands = 0
+        self.pitch_acquire_diagnostic = None
 
     def reset_target(self, aircraft_id):
         self.aircraft_id = aircraft_id
         self.mode = "ACQUIRE"
         self.last_yaw_rate = 0.0
         self.inside_cycles = 0
+        self.pitch_acquire_armed = True
+        self.pitch_acquire_active = False
+        self.pitch_acquire_target_deg = None
+        self.pitch_acquire_direction = 0
+        self.pitch_acquire_elapsed_s = 0.0
+        self.pitch_acquire_commands = 0
+        self.pitch_acquire_diagnostic = None
+
+    def _stop_pitch_acquire(self, diagnostic):
+        self.pitch_acquire_armed = False
+        self.pitch_acquire_active = False
+        self.pitch_acquire_direction = 0
+        self.pitch_acquire_diagnostic = diagnostic
+        return 0
+
+    def _pitch_acquire_command(self, target, dt_s):
+        if not target.vertical_valid or target.target_pitch_relative_deg is None:
+            if self.pitch_acquire_active:
+                return self._stop_pitch_acquire("PITCH_ACQUIRE_LIMIT_VERTICAL_INVALID")
+            return 0
+
+        if self.pitch_acquire_armed:
+            self.pitch_acquire_target_deg = clamp(
+                target.target_pitch_relative_deg,
+                -self.PITCH_ACQUIRE_FENCE_DEG,
+                self.PITCH_ACQUIRE_FENCE_DEG)
+            error = self.pitch_acquire_target_deg - self.estimated_pitch_deg
+            self.pitch_acquire_armed = False
+            if abs(self.estimated_pitch_deg) >= self.PITCH_ACQUIRE_FENCE_DEG:
+                return self._stop_pitch_acquire("PITCH_ACQUIRE_LIMIT_FENCE")
+            if abs(error) <= 0.35:
+                return self._stop_pitch_acquire("PITCH_ACQUIRE_COMPLETE")
+            self.pitch_acquire_direction = 1 if error > 0 else -1
+            self.pitch_acquire_active = True
+
+        if not self.pitch_acquire_active:
+            return 0
+        if abs(self.estimated_pitch_deg) >= self.PITCH_ACQUIRE_FENCE_DEG:
+            return self._stop_pitch_acquire("PITCH_ACQUIRE_LIMIT_FENCE")
+        if self.pitch_acquire_elapsed_s + dt_s > self.PITCH_ACQUIRE_TIMEOUT_S + 1e-9:
+            return self._stop_pitch_acquire("PITCH_ACQUIRE_LIMIT_TIMEOUT")
+        if self.pitch_acquire_commands >= self.PITCH_ACQUIRE_COMMAND_BUDGET:
+            return self._stop_pitch_acquire("PITCH_ACQUIRE_LIMIT_COMMAND_BUDGET")
+        remaining = self.pitch_acquire_target_deg - self.estimated_pitch_deg
+        if self.pitch_acquire_direction * remaining <= 0 or abs(remaining) <= 0.35:
+            return self._stop_pitch_acquire("PITCH_ACQUIRE_COMPLETE")
+
+        self.pitch_acquire_elapsed_s += dt_s
+        self.pitch_acquire_commands += 1
+        return (self.PITCH_ACQUIRE_COMMAND * self.pitch_acquire_direction
+                * self.RS4_PITCH_SIGN)
 
     def correct_telemetry(self, measured_yaw_relative_deg, measured_pitch_relative_deg,
                           blend=0.35):
@@ -395,6 +458,7 @@ class ControllerV1:
         dt_s = clamp(dt_s, 0.001, 0.25)
         if target.status == "HOME":
             self.aircraft_id = None
+            self._stop_pitch_acquire("PITCH_ACQUIRE_HOME_HOLD")
             yaw_error = wrap180(-self.estimated_yaw_deg)
             pitch_error = -self.estimated_pitch_deg
             desired_rate = clamp(self.home_kp * yaw_error,
@@ -403,31 +467,33 @@ class ControllerV1:
             yaw_rate = self._slew_yaw_rate(desired_rate, dt_s)
             pan = int(clamp(round(yaw_rate / self.YAW_DEG_S_PER_COMMAND),
                             -self.max_yaw_command, self.max_yaw_command))
-            tilt = self.pitch_actuator.command(pitch_error)
             self.mode = "HOLD_HOME" if abs(yaw_error) <= 0.35 and abs(pitch_error) <= 0.35 else "RETURN_HOME"
             if self.mode == "HOLD_HOME":
                 yaw_rate = 0.0
                 pan = 0
-                tilt = 0
                 self.last_yaw_rate = 0.0
             self.estimated_yaw_deg = wrap180(self.estimated_yaw_deg + yaw_rate * dt_s)
             return ControllerOutput(self.mode, yaw_error, pitch_error, yaw_rate, 0.0,
                                     pan * self.RS4_YAW_SIGN,
-                                    tilt * self.RS4_PITCH_SIGN)
+                                    0, self.pitch_acquire_diagnostic)
         if target.aircraft_id and target.aircraft_id != self.aircraft_id:
             self.reset_target(target.aircraft_id)
         if target.status == "INVALID" or not target.horizontal_valid:
+            self._stop_pitch_acquire("PITCH_ACQUIRE_LIMIT_INVALID")
             self.mode = "FAULT"
             self.last_yaw_rate = 0.0
-            return ControllerOutput(self.mode, None, None, 0.0, 0.0, 0, 0)
+            return ControllerOutput(self.mode, None, None, 0.0, 0.0, 0, 0,
+                                    self.pitch_acquire_diagnostic)
         if target.status == "STALE":
+            self._stop_pitch_acquire("PITCH_ACQUIRE_LIMIT_STALE")
             self.mode = "HOLD"
             change = self.stale_ramp_dps2 * dt_s
             self.last_yaw_rate = max(0.0, self.last_yaw_rate - change) if self.last_yaw_rate > 0 else min(0.0, self.last_yaw_rate + change)
             command = round(self.last_yaw_rate / self.YAW_DEG_S_PER_COMMAND) * self.RS4_YAW_SIGN
             command = int(clamp(command, -self.max_yaw_command, self.max_yaw_command))
             self.estimated_yaw_deg = wrap180(self.estimated_yaw_deg + self.last_yaw_rate * dt_s)
-            return ControllerOutput(self.mode, None, None, self.last_yaw_rate, 0.0, command, 0)
+            return ControllerOutput(self.mode, None, None, self.last_yaw_rate, 0.0,
+                                    command, 0, self.pitch_acquire_diagnostic)
 
         yaw_error = wrap180(target.target_yaw_relative_deg - self.estimated_yaw_deg)
         pitch_error = None if not target.vertical_valid else target.target_pitch_relative_deg - self.estimated_pitch_deg
@@ -453,11 +519,11 @@ class ControllerV1:
         yaw_rate = self._slew_yaw_rate(yaw_rate, dt_s)
         pan = int(clamp(round(yaw_rate / self.YAW_DEG_S_PER_COMMAND) * self.RS4_YAW_SIGN,
                         -self.max_yaw_command, self.max_yaw_command))
-        tilt = 0 if pitch_error is None else self.pitch_actuator.command(pitch_error) * self.RS4_PITCH_SIGN
+        tilt = self._pitch_acquire_command(target, dt_s)
         self.last_yaw_rate = yaw_rate
         self.estimated_yaw_deg = wrap180(self.estimated_yaw_deg + yaw_rate * dt_s)
-        requested_pitch = target.target_pitch_rate_deg_s if pitch_error is not None else 0.0
-        return ControllerOutput(self.mode, yaw_error, pitch_error, yaw_rate, requested_pitch, pan, tilt)
+        return ControllerOutput(self.mode, yaw_error, pitch_error, yaw_rate, 0.0,
+                                pan, tilt, self.pitch_acquire_diagnostic)
 
     def _slew_yaw_rate(self, desired_rate, dt_s):
         change = self.max_yaw_accel_dps2 * dt_s
