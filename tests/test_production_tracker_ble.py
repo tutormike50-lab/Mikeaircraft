@@ -12,7 +12,7 @@ sys.path.insert(0, str(SCRIPTS))
 from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, client_connected,
                                 configured_effective_latency_s, effective_write_hz, make_disconnect_callback,
                                 observation_from_adsb, prepare_rs4_gatt,
-                                rs4_protocol_response)  # noqa: E402
+                                rs4_protocol_response, RS4_PITCH_SIGN)  # noqa: E402
 from production_tracking import CameraReference, ControllerV1, GeometryTargetSource  # noqa: E402
 
 
@@ -29,6 +29,11 @@ class FakeTx:
 
 
 class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
+    def test_final_rs4_pitch_hardware_sign_is_inverted(self):
+        logical_tilt_command = 40
+        self.assertEqual(RS4_PITCH_SIGN, -1)
+        self.assertEqual(logical_tilt_command * RS4_PITCH_SIGN, -40)
+
     def test_effective_latency_configuration_is_bounded(self):
         self.assertEqual(configured_effective_latency_s("0.50"), 0.5)
         with self.assertRaises(ValueError):
