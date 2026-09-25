@@ -33,7 +33,10 @@ CONTROL_PERIOD_S = 0.05
 ADS_B_POLL_S = 0.20
 TELEMETRY_MAX_AGE_S = 2.0
 RS4_YAW_SIGN = 1
-RS4_PITCH_SIGN = 1
+# Physical test on this RS4 established that a positive packet tilt moves the
+# camera DOWN.  MikeAircraft logical pitch remains positive-UP; invert once,
+# here at the final hardware mapping boundary.
+RS4_PITCH_SIGN = -1
 
 RS4_PROTOCOL_REQUESTS = {
     (0x04, 0x02, 0x00, 0x04, 0x38),

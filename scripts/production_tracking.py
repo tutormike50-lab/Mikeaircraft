@@ -343,16 +343,40 @@ class ControllerOutput:
     tilt_command: int
 
 
-class LegacyPitchActuator:
-    """Preserve the proven stepped pitch behaviour pending characterisation."""
+class SmoothPitchActuator:
+    """Conservative pitch-only rate controller; command calibration is experimental."""
 
-    @staticmethod
-    def command(physical_pitch_error_deg):
-        magnitude = abs(physical_pitch_error_deg)
-        if magnitude <= 0.35:
-            return 0
-        speed = 90 if magnitude > 8 else 70 if magnitude > 4 else 50 if magnitude > 2 else 35 if magnitude > 0.8 else 25
-        return speed if physical_pitch_error_deg > 0 else -speed
+    # No measured RS4 pitch command-to-rate calibration is available.  These
+    # deliberately conservative initial values keep the old maximum command
+    # (90) out of use while allowing continuous commands below its old minimum
+    # step (25).  Characterise pitch independently before increasing them.
+    DEG_S_PER_COMMAND = 0.05
+    KP = 0.60
+    MAX_RATE_DEG_S = 4.0
+    MAX_ACCEL_DEG_S2 = 6.0
+    SETTLE_ERROR_DEG = 0.08
+    SETTLE_RATE_DEG_S = 0.03
+
+    def __init__(self):
+        self.last_rate_deg_s = 0.0
+
+    def reset(self):
+        self.last_rate_deg_s = 0.0
+
+    def command(self, pitch_error_deg, target_pitch_rate_deg_s, dt_s):
+        desired_rate = target_pitch_rate_deg_s + self.KP * pitch_error_deg
+        desired_rate = clamp(desired_rate, -self.MAX_RATE_DEG_S,
+                             self.MAX_RATE_DEG_S)
+        change = self.MAX_ACCEL_DEG_S2 * dt_s
+        rate = clamp(desired_rate, self.last_rate_deg_s - change,
+                     self.last_rate_deg_s + change)
+        if (abs(pitch_error_deg) <= self.SETTLE_ERROR_DEG and
+                abs(target_pitch_rate_deg_s) <= self.SETTLE_RATE_DEG_S and
+                abs(rate) <= change):
+            rate = 0.0
+        self.last_rate_deg_s = rate
+        motor = int(clamp(round(rate / self.DEG_S_PER_COMMAND), -80, 80))
+        return rate, motor
 
 
 class ControllerV1:
@@ -364,7 +388,7 @@ class ControllerV1:
                  track_kp=0.45,
                  max_yaw_command=300, capture_cycles=4, stale_ramp_dps2=12.0,
                  max_yaw_accel_dps2=24.0, home_kp=0.65):
-        self.pitch_actuator = pitch_actuator or LegacyPitchActuator()
+        self.pitch_actuator = pitch_actuator or SmoothPitchActuator()
         self.acquire_kp = acquire_kp
         self.acquire_kd = acquire_kd
         self.track_kp = track_kp
@@ -384,6 +408,7 @@ class ControllerV1:
         self.aircraft_id = aircraft_id
         self.mode = "ACQUIRE"
         self.last_yaw_rate = 0.0
+        self.pitch_actuator.reset()
         self.inside_cycles = 0
 
     def correct_telemetry(self, measured_yaw_relative_deg, measured_pitch_relative_deg,
@@ -403,15 +428,16 @@ class ControllerV1:
             yaw_rate = self._slew_yaw_rate(desired_rate, dt_s)
             pan = int(clamp(round(yaw_rate / self.YAW_DEG_S_PER_COMMAND),
                             -self.max_yaw_command, self.max_yaw_command))
-            tilt = self.pitch_actuator.command(pitch_error)
+            pitch_rate, tilt = self.pitch_actuator.command(pitch_error, 0.0, dt_s)
             self.mode = "HOLD_HOME" if abs(yaw_error) <= 0.35 and abs(pitch_error) <= 0.35 else "RETURN_HOME"
             if self.mode == "HOLD_HOME":
                 yaw_rate = 0.0
                 pan = 0
                 tilt = 0
                 self.last_yaw_rate = 0.0
+                self.pitch_actuator.reset()
             self.estimated_yaw_deg = wrap180(self.estimated_yaw_deg + yaw_rate * dt_s)
-            return ControllerOutput(self.mode, yaw_error, pitch_error, yaw_rate, 0.0,
+            return ControllerOutput(self.mode, yaw_error, pitch_error, yaw_rate, pitch_rate,
                                     pan * self.RS4_YAW_SIGN,
                                     tilt * self.RS4_PITCH_SIGN)
         if target.aircraft_id and target.aircraft_id != self.aircraft_id:
@@ -419,9 +445,11 @@ class ControllerV1:
         if target.status == "INVALID" or not target.horizontal_valid:
             self.mode = "FAULT"
             self.last_yaw_rate = 0.0
+            self.pitch_actuator.reset()
             return ControllerOutput(self.mode, None, None, 0.0, 0.0, 0, 0)
         if target.status == "STALE":
             self.mode = "HOLD"
+            self.pitch_actuator.reset()
             change = self.stale_ramp_dps2 * dt_s
             self.last_yaw_rate = max(0.0, self.last_yaw_rate - change) if self.last_yaw_rate > 0 else min(0.0, self.last_yaw_rate + change)
             command = round(self.last_yaw_rate / self.YAW_DEG_S_PER_COMMAND) * self.RS4_YAW_SIGN
@@ -453,10 +481,15 @@ class ControllerV1:
         yaw_rate = self._slew_yaw_rate(yaw_rate, dt_s)
         pan = int(clamp(round(yaw_rate / self.YAW_DEG_S_PER_COMMAND) * self.RS4_YAW_SIGN,
                         -self.max_yaw_command, self.max_yaw_command))
-        tilt = 0 if pitch_error is None else self.pitch_actuator.command(pitch_error) * self.RS4_PITCH_SIGN
+        if pitch_error is None:
+            self.pitch_actuator.reset()
+            requested_pitch, tilt = 0.0, 0
+        else:
+            requested_pitch, tilt = self.pitch_actuator.command(
+                pitch_error, target.target_pitch_rate_deg_s, dt_s)
+            tilt *= self.RS4_PITCH_SIGN
         self.last_yaw_rate = yaw_rate
         self.estimated_yaw_deg = wrap180(self.estimated_yaw_deg + yaw_rate * dt_s)
-        requested_pitch = target.target_pitch_rate_deg_s if pitch_error is not None else 0.0
         return ControllerOutput(self.mode, yaw_error, pitch_error, yaw_rate, requested_pitch, pan, tilt)
 
     def _slew_yaw_rate(self, desired_rate, dt_s):

@@ -12,7 +12,7 @@ sys.path.insert(0, str(SCRIPTS))
 from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, client_connected,
                                 configured_effective_latency_s, effective_write_hz, make_disconnect_callback,
                                 observation_from_adsb, prepare_rs4_gatt,
-                                rs4_protocol_response)  # noqa: E402
+                                rs4_protocol_response, RS4_PITCH_SIGN)  # noqa: E402
 from production_tracking import CameraReference, ControllerV1, GeometryTargetSource  # noqa: E402
 
 
@@ -29,6 +29,13 @@ class FakeTx:
 
 
 class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
+    def test_final_rs4_pitch_boundary_maps_logical_up_and_down_physically(self):
+        self.assertEqual(RS4_PITCH_SIGN, -1)
+        # Physical observation: positive RS4 packet tilt moved DOWN.  Therefore
+        # logical UP must be negative at this sole hardware boundary.
+        self.assertLess(40 * RS4_PITCH_SIGN, 0)
+        self.assertGreater(-40 * RS4_PITCH_SIGN, 0)
+
     def test_effective_latency_configuration_is_bounded(self):
         self.assertEqual(configured_effective_latency_s("0.50"), 0.5)
         with self.assertRaises(ValueError):

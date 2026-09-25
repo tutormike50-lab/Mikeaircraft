@@ -1,6 +1,8 @@
 """Focused offline acceptance tests; no network, Bluetooth, or gimbal access."""
 
 from dataclasses import replace
+import hashlib
+import inspect
 from pathlib import Path
 import math
 import sys
@@ -10,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from production_tracking import (  # noqa: E402
     AircraftObservation, CameraReference, ControllerV1, GeometryTargetSource,
+    SmoothPitchActuator,
 )
 
 
@@ -53,6 +56,8 @@ class ProductionTrackingTests(unittest.TestCase):
         output = controller.step(stale, 0.05)
         self.assertEqual(output.state, "HOLD")
         self.assertAlmostEqual(output.requested_yaw_rate_deg_s, 2.5)
+        self.assertEqual((output.requested_pitch_rate_deg_s, output.tilt_command),
+                         (0.0, 0))
         invalid_source = GeometryTargetSource(self.camera)
         invalid_source.select_aircraft("abc123")
         invalid = invalid_source.latest(self.t0)
@@ -230,6 +235,60 @@ class ProductionTrackingTests(unittest.TestCase):
         self.assertTrue(self.source.update(later))
         target = self.source.latest(self.t0 + 1000)
         self.assertGreater(target.target_yaw_rate_deg_s, 0.0)
+
+    def test_yaw_controller_source_guard_matches_b72738c(self):
+        # Projection deliberately includes every ControllerV1 source line that
+        # mentions yaw plus the shared ACQUIRE/TRACK transition state.  Its
+        # expected digest was generated from exact commit b72738c.
+        source = inspect.getsource(ControllerV1)
+        projection = "\n".join(
+            line.rstrip() for line in source.splitlines()
+            if ("yaw" in line.lower() or "self.mode" in line or
+                "inside_cycles" in line or "capture_cycles" in line or
+                "aircraft_id" in line)
+            and "pitch" not in line.lower()
+        )
+        self.assertEqual(hashlib.sha256(projection.encode()).hexdigest(),
+                         "2374bd8ecc4b87a1dfd4a9b33f9e5ec479bd9897df716fb307cb2964f7b839ca")
+
+    def test_pitch_law_preserves_feed_forward_and_settles(self):
+        actuator = SmoothPitchActuator()
+        rate, command = actuator.command(0.0, 0.5, 0.05)
+        self.assertAlmostEqual(rate, 0.3)
+        self.assertEqual(command, 6)
+        for _ in range(10):
+            rate, command = actuator.command(0.0, 0.0, 0.05)
+        self.assertEqual((rate, command), (0.0, 0))
+
+    def test_pitch_commands_are_continuous_bounded_and_bidirectional(self):
+        up = SmoothPitchActuator()
+        up_commands = [up.command(8.0, 0.0, 0.05)[1] for _ in range(20)]
+        self.assertTrue(all(0 < command <= 80 for command in up_commands))
+        self.assertTrue(all(right - left <= 6
+                            for left, right in zip(up_commands, up_commands[1:])))
+        down = SmoothPitchActuator()
+        self.assertLess(down.command(-8.0, 0.0, 0.05)[1], 0)
+
+    def test_moving_pitch_target_does_not_repeatedly_reverse(self):
+        self.source.update(self.observation)
+        base = self.source.latest(self.t0)
+        controller = ControllerV1(capture_cycles=1)
+        measured_pitch = 0.0
+        signs = []
+        errors = []
+        for index in range(240):
+            target_pitch = 2.0 + 0.5 * index * 0.05
+            target = replace(base, target_pitch_relative_deg=target_pitch,
+                             target_pitch_rate_deg_s=0.5, vertical_valid=True)
+            controller.correct_telemetry(0.0, measured_pitch, blend=1.0)
+            output = controller.step(target, 0.05)
+            measured_pitch += output.tilt_command * SmoothPitchActuator.DEG_S_PER_COMMAND * 0.05
+            errors.append(output.pitch_error_deg)
+            if output.tilt_command:
+                signs.append(1 if output.tilt_command > 0 else -1)
+        reversals = sum(left != right for left, right in zip(signs, signs[1:]))
+        self.assertLessEqual(reversals, 1)
+        self.assertLess(abs(errors[-1]), 0.2)
 
 
 if __name__ == "__main__":
