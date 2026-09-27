@@ -55,7 +55,6 @@
           if(fixes.length<8)blockers.push("INSUFFICIENT ACCEPTED FIXES");
           if(result&&result.reportedAccuracyM>10)blockers.push("INSUFFICIENT ACCURACY");
           if(result&&result.clusterRadius95M>5)blockers.push("POSITION NOT STABLE: CLUSTER RADIUS");
-          if(result&&result.rejectedCount>0)blockers.push("POSITION OUTLIERS REJECTED");
           if(result&&!stable)blockers.push("POSITION NOT STABLE: RECENT SPREAD");
         }
         const acceptanceMet=blockers.length===0&&Boolean(result),lastFixAgeSeconds=fixes.length?Math.max(0,(at-fixes[fixes.length-1].timestamp)/1000):null;

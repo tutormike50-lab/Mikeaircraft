@@ -341,7 +341,7 @@ module.exports = async function handler(req, res) {
     <section class="card location-card calibration-only">
       <div class="cardhead">
         <h2>Camera Calibration</h2>
-        <p>Take this phone beside the camera to calibrate its position, true heading and elevation.</p>
+        <p>Take this phone beside the camera to calibrate its position, true heading and elevation. HOME is the camera optical direction measured here.</p>
       </div>
       <div class="cardbody">
         <div class="location-summary">
@@ -350,10 +350,12 @@ module.exports = async function handler(req, res) {
         </div>
         <div class="location-summary"><span class="location-label">HEADING</span><span id="headingStatus" class="location-value warn">NOT READY</span></div>
         <div class="location-summary"><span class="location-label">ELEVATION</span><span id="elevationStatus" class="location-value warn">NOT READY</span></div>
+        <label class="location-note" for="magneticDeclination">Local magnetic declination (degrees, east positive / west negative)</label>
+        <input id="magneticDeclination" type="number" step="0.1" min="-30" max="30" inputmode="decimal" placeholder="Required on iPhone Safari">
         <div id="calibrationTarget" class="calibration-target" aria-hidden="true">
           <div class="crosshair" aria-hidden="true"></div>
           <div id="calibrationState" class="calibration-state">ACQUIRING</div>
-          <p class="calibration-instruction">Hold this crosshair against the defined camera lens reference point and keep the phone stationary.</p>
+          <p class="calibration-instruction">Hold the phone screen-up in portrait. Point the phone's TOP EDGE exactly along the camera's optical direction and match its elevation; keep it stationary.</p>
           <div class="calibration-progress"><span id="calibrationProgress"></span></div>
           <div id="calibrationCounts" class="calibration-counts">0 fresh fixes · 0 seconds</div>
           <details class="engineering"><summary>Engineering details</summary><pre id="calibrationEngineering">Waiting for fresh fixes.</pre></details>
@@ -423,6 +425,7 @@ module.exports = async function handler(req, res) {
     const calibrationEngineering = document.getElementById("calibrationEngineering");
     const headingStatus = document.getElementById("headingStatus");
     const elevationStatus = document.getElementById("elevationStatus");
+    const magneticDeclination = document.getElementById("magneticDeclination");
     const cameraZoom = document.getElementById("cameraZoom");
     const stabilisationMode = document.getElementById("stabilisationMode");
     const zoomPercent = document.getElementById("zoomPercent");
@@ -842,6 +845,7 @@ module.exports = async function handler(req, res) {
                 homeElevationDeg: orientation.homeElevationDeg,
                 headingOffsetDeg: orientation.headingOffsetDeg,
                 elevationOffsetDeg: orientation.elevationOffsetDeg,
+                magneticDeclinationDeg: orientation.magneticDeclinationDeg,
                 headingSpreadDeg: orientation.headingSpreadDeg,
                 elevationSpreadDeg: orientation.elevationSpreadDeg,
                 sampleCount: orientation.sampleCount,
@@ -941,7 +945,12 @@ module.exports = async function handler(req, res) {
         return;
       }
 
-      orientationSession = CameraOrientationCalibration.createSession({ headingDeg: 0, elevationDeg: 0 });
+      const declination = Number(magneticDeclination.value);
+      if (!magneticDeclination.value.trim() || !Number.isFinite(declination)) {
+        setLocationMessage("Enter the local magnetic declination for this Operation Location (east positive, west negative) so magnetic iPhone heading can be converted to true heading.", "bad");
+        return;
+      }
+      orientationSession = CameraOrientationCalibration.createSession({ headingDeg: 0, elevationDeg: 0, magneticDeclinationDeg: declination });
       const orientationPermission = await CameraOrientationCalibration.requestPermission(window);
       if (orientationPermission.granted) {
         orientationListener = (event) => { orientationSession.add(event); renderOrientation(); };

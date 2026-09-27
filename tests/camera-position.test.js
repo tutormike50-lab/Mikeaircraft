@@ -141,13 +141,13 @@ test("snapshot distinguishes rejected input fixes from spatial outliers", () => 
   assert.equal(snapshot.lastRejectionReason, "STALE GEOLOCATION FIX");
 });
 
-test("a rejected spatial outlier prevents acceptance", () => {
+test("a discarded spatial outlier does not permanently prevent acceptance", () => {
   const start = 100000;
   const fixes = stationaryFixes(start, 8);
   fixes.push(fix(start, 58, 250, -180));
   const snapshot = sessionWith(start, fixes).snapshot(start + 60000);
   assert.equal(snapshot.estimate.rejectedCount, 1);
-  assert.equal(snapshot.acceptanceMet, false);
+  assert.equal(snapshot.acceptanceMet, true);
 });
 
 test("grade thresholds are exact and above 20 m rejects", () => {

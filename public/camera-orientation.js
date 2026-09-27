@@ -14,9 +14,11 @@
     const radians = values.map(value => value * Math.PI / 180);
     return wrap360(Math.atan2(radians.reduce((sum, value) => sum + Math.sin(value), 0), radians.reduce((sum, value) => sum + Math.cos(value), 0)) * 180 / Math.PI);
   }
-  function headingFromEvent(event) {
-    if (Number.isFinite(event && event.webkitCompassHeading)) return wrap360(event.webkitCompassHeading);
+  function headingFromEvent(event, magneticDeclinationDeg) {
     if (event && event.absolute === true && Number.isFinite(event.alpha)) return wrap360(360 - event.alpha);
+    if (Number.isFinite(event && event.webkitCompassHeading) && Number.isFinite(magneticDeclinationDeg)) {
+      return wrap360(event.webkitCompassHeading + magneticDeclinationDeg);
+    }
     return null;
   }
   function elevationFromEvent(event) {
@@ -27,12 +29,13 @@
   function createSession(offsets) {
     const headingOffsetDeg = Number.isFinite(Number(offsets && offsets.headingDeg)) ? Number(offsets.headingDeg) : 0;
     const elevationOffsetDeg = Number.isFinite(Number(offsets && offsets.elevationDeg)) ? Number(offsets.elevationDeg) : 0;
+    const magneticDeclinationDeg = Number.isFinite(Number(offsets && offsets.magneticDeclinationDeg)) ? Number(offsets.magneticDeclinationDeg) : null;
     const samples = [];
     let reason = "Waiting for iPhone orientation readings.";
     return {
       add(event) {
-        const heading = headingFromEvent(event), elevation = elevationFromEvent(event);
-        if (heading === null || elevation === null) { reason = "Browser did not provide both compass heading and elevation."; return false; }
+        const heading = headingFromEvent(event, magneticDeclinationDeg), elevation = elevationFromEvent(event);
+        if (heading === null || elevation === null) { reason = "True heading requires absolute orientation or the local magnetic declination; elevation also must be available."; return false; }
         samples.push({ heading, elevation });
         if (samples.length > 120) samples.shift();
         return true;
@@ -57,6 +60,9 @@
           elevationSpreadDeg,
           headingOffsetDeg,
           elevationOffsetDeg,
+          magneticDeclinationDeg,
+          headingReference: "TRUE_NORTH",
+          phoneAxis: "PORTRAIT_TOP_EDGE",
           source: "IPHONE_DEVICE_ORIENTATION",
           quality: stable ? "STABLE" : "UNSTABLE"
         };

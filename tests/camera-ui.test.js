@@ -21,6 +21,8 @@ test("control panel exposes crosshair workflow and continuous fresh geolocation"
   assert.match(html, /CameraOrientationCalibration\.requestPermission\(window\)/);
   assert.match(html, /HEADING/);
   assert.match(html, /ELEVATION/);
+  assert.match(html, /TOP EDGE exactly along the camera's optical direction/);
+  assert.match(html, /Local magnetic declination/);
   assert.match(html, /snapshot\.acceptanceMet && !orientation\.ready/);
   assert.match(html, /previous complete CameraReference was preserved/);
   assert.match(html, /fetch\("\/api\/camera-reference\?t="/);

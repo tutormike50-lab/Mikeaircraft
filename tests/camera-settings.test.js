@@ -71,7 +71,7 @@ test("persists stable HOME orientation provenance and fixed offsets", () => {
     lat: 50, lon: 14, accuracyM: 6,
     orientation: { homeTrueAzimuthDeg: 243.24, homeElevationDeg: 3.44, headingOffsetDeg: 1.5, elevationOffsetDeg: -0.5, headingSpreadDeg: 2, elevationSpreadDeg: 1, sampleCount: 20 }
   });
-  assert.deepEqual(value.orientation, { homeTrueAzimuthDeg: 243.2, homeElevationDeg: 3.4, headingOffsetDeg: 1.5, elevationOffsetDeg: -0.5, headingSpreadDeg: 2, elevationSpreadDeg: 1, sampleCount: 20, source: "IPHONE_DEVICE_ORIENTATION", quality: "STABLE", calibratedAt: value.orientation.calibratedAt });
+  assert.deepEqual(value.orientation, { homeTrueAzimuthDeg: 243.2, homeElevationDeg: 3.4, headingOffsetDeg: 1.5, elevationOffsetDeg: -0.5, magneticDeclinationDeg: null, headingReference: "TRUE_NORTH", phoneAxis: "PORTRAIT_TOP_EDGE", headingSpreadDeg: 2, elevationSpreadDeg: 1, sampleCount: 20, source: "IPHONE_DEVICE_ORIENTATION", quality: "STABLE", calibratedAt: value.orientation.calibratedAt });
   assert.deepEqual(value.readiness, { position: true, heading: true, elevation: true, complete: true });
 });
 
