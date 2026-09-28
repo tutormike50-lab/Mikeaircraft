@@ -1,14 +1,26 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { validateManifest, manifestHash } = require('../lib/release-manifest');
+const { validateManifest, manifestHash, ALLOWED_PI_FILES } = require('../lib/release-manifest');
 const { publicState } = require('../lib/tracker-bridge-state');
 
 function manifest() {
   return { schema: 1, releaseId: 'ec9b423-recovery', serverCommit: 'a'.repeat(40), piFiles: [
     { path: 'scripts/pi_bridge.py', sha256: 'b'.repeat(64) },
-    { path: 'scripts/production_tracker.py', sha256: 'c'.repeat(64) }
+    { path: 'scripts/production_tracker.py', sha256: 'c'.repeat(64) },
+    { path: 'scripts/control_panel_trim.py', sha256: 'd'.repeat(64) }
   ] };
 }
+
+test('release allowlist is exact and includes control_panel_trim only as the sixth path', () => {
+  assert.deepEqual([...ALLOWED_PI_FILES].sort(), [
+    'scripts/camera_optics.py',
+    'scripts/control_panel_trim.py',
+    'scripts/pi_bridge.py',
+    'scripts/production_tracker.py',
+    'scripts/production_tracking.py',
+    'scripts/release_manager.py'
+  ]);
+});
 
 test('strict release manifest accepts only fixed allowlisted files', () => {
   const value = manifest(); assert.equal(validateManifest(value), value); assert.match(manifestHash(value), /^[0-9a-f]{64}$/);

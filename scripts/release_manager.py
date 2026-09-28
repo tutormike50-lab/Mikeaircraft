@@ -23,6 +23,7 @@ ALLOWED_FILES = frozenset({
     "scripts/production_tracker.py",
     "scripts/production_tracking.py",
     "scripts/camera_optics.py",
+    "scripts/control_panel_trim.py",
 })
 
 
