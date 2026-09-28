@@ -10,7 +10,7 @@ modified.
 import argparse
 import asyncio
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -18,6 +18,7 @@ import math
 import os
 from pathlib import Path
 import struct
+import sys
 import time
 import traceback
 import urllib.request
@@ -34,6 +35,12 @@ ADS_B_POLL_S = 0.20
 TELEMETRY_MAX_AGE_S = 2.0
 RS4_YAW_SIGN = 1
 RS4_PITCH_SIGN = 1
+PITCH_ACQUIRE_COMMAND = 100
+PITCH_FENCE_DEG = 12.0
+PITCH_ON_TARGET_DEG = 1.0
+PITCH_MAX_CUMULATIVE_S = 2.0
+PITCH_ACQUIRE_TIMEOUT_S = 8.0
+PITCH_TELEMETRY_STALE_S = 2.5
 
 RS4_PROTOCOL_REQUESTS = {
     (0x04, 0x02, 0x00, 0x04, 0x38),
@@ -220,22 +227,46 @@ def observation_from_adsb(aircraft, aircraft_id, source_snapshot_s, local_read_m
     timestamp_ms = round((float(source_snapshot_s) - float(seen_pos)) * 1000)
     if timestamp_ms > local_read_ms + 2000:
         raise ValueError("derived source observation time is materially in the future")
-    altitude = aircraft.get("alt_geom")
-    altitude_source = "ADS_B_GEOMETRIC"
-    if not isinstance(altitude, (int, float)):
-        altitude = None
-        altitude_source = "UNAVAILABLE_BAROMETRIC_NOT_SUBSTITUTED"
+    geometric_altitude = aircraft.get("alt_geom")
+    if (not isinstance(geometric_altitude, (int, float))
+            or isinstance(geometric_altitude, bool)
+            or not math.isfinite(geometric_altitude)):
+        geometric_altitude = None
+    legacy_pressure_altitude = aircraft.get("alt_baro")
+    if legacy_pressure_altitude is None:
+        legacy_pressure_altitude = aircraft.get("altitude")
+    if (not isinstance(legacy_pressure_altitude, (int, float))
+            or isinstance(legacy_pressure_altitude, bool)
+            or not math.isfinite(legacy_pressure_altitude)):
+        legacy_pressure_altitude = None
+    if geometric_altitude is not None:
+        altitude_source = "ADS_B_GEOMETRIC"
+        legacy_pressure_altitude = None
+    elif legacy_pressure_altitude is not None:
+        altitude_source = "DUMP1090_LEGACY_PRESSURE_ALTITUDE_APPROXIMATE"
+    else:
+        altitude_source = "UNAVAILABLE"
     vertical_rate = aircraft.get("geom_rate")
-    if not isinstance(vertical_rate, (int, float)):
+    vertical_rate_source = "ADS_B_GEOMETRIC_RATE"
+    if (not isinstance(vertical_rate, (int, float))
+            or isinstance(vertical_rate, bool) or not math.isfinite(vertical_rate)):
+        vertical_rate = aircraft.get("vert_rate")
+        vertical_rate_source = "DUMP1090_LEGACY_BAROMETRIC_RATE"
+    if (not isinstance(vertical_rate, (int, float))
+            or isinstance(vertical_rate, bool) or not math.isfinite(vertical_rate)):
         vertical_rate = None
+        vertical_rate_source = "UNAVAILABLE"
     ground_speed = aircraft.get("gs")
     track = aircraft.get("track")
     return AircraftObservation(aircraft_id, timestamp_ms, float(lat), float(lon),
-                               None if altitude is None else float(altitude) * 0.3048,
+                               None if geometric_altitude is None else float(geometric_altitude) * 0.3048,
                                float(ground_speed) if isinstance(ground_speed, (int, float)) else None,
                                float(track) if isinstance(track, (int, float)) else None,
                                float(vertical_rate) if vertical_rate is not None else None,
-                               altitude_source=altitude_source)
+                               altitude_source=altitude_source,
+                               altitude_barometric_m=(None if legacy_pressure_altitude is None
+                                                       else float(legacy_pressure_altitude) * 0.3048),
+                               vertical_rate_source=vertical_rate_source)
 
 
 class AdsbObservationIntake:
@@ -259,7 +290,9 @@ class AdsbObservationIntake:
         payload = [observation.aircraft_id, observation.timestamp_ms,
                    observation.latitude_deg, observation.longitude_deg,
                    observation.altitude_ellipsoid_m, observation.ground_speed_kt,
-                   observation.track_deg, observation.vertical_rate_ft_min]
+                   observation.track_deg, observation.vertical_rate_ft_min,
+                   observation.altitude_barometric_m, observation.altitude_source,
+                   observation.vertical_rate_source]
         encoded = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()[:20]
 
@@ -278,9 +311,12 @@ class AdsbObservationIntake:
             "latitude_deg": aircraft.get("lat"),
             "longitude_deg": aircraft.get("lon"),
             "altitude_ellipsoid_m": None,
+            "altitude_barometric_m": None,
+            "altitude_source": "UNAVAILABLE",
             "ground_speed_kt": aircraft.get("gs"),
             "track_deg": aircraft.get("track"),
-            "vertical_rate_ft_min": aircraft.get("geom_rate"),
+            "vertical_rate_ft_min": None,
+            "vertical_rate_source": "UNAVAILABLE",
             "duplicate": False,
             "estimator_accepted": False,
         }
@@ -290,7 +326,11 @@ class AdsbObservationIntake:
             base.update(source_snapshot_timestamp_ms=snapshot_ms,
                         source_observation_timestamp_ms=observation.timestamp_ms,
                         source_age_ms=local_read_ms - observation.timestamp_ms,
-                        altitude_ellipsoid_m=observation.altitude_ellipsoid_m)
+                        altitude_ellipsoid_m=observation.altitude_ellipsoid_m,
+                        altitude_barometric_m=observation.altitude_barometric_m,
+                        altitude_source=observation.altitude_source,
+                        vertical_rate_ft_min=observation.vertical_rate_ft_min,
+                        vertical_rate_source=observation.vertical_rate_source)
             if self.last_snapshot_ms is not None and snapshot_ms < self.last_snapshot_ms - 1000:
                 raise ValueError("dump1090 snapshot clock jumped backward")
             identity = self._identity(observation)
@@ -312,6 +352,185 @@ class AdsbObservationIntake:
             return AdsbIntakeResult(None, base, False)
 
 
+@dataclass(frozen=True)
+class PitchAcquireDecision:
+    command: int
+    state: str = "ACQUIRE"
+    reason: object = None
+    pulse_duration_s: float = 0.0
+    physical_pitch_deg: object = None
+    error_deg: object = None
+    event: object = None
+
+
+class AltitudePitchAcquisition:
+    """Bounded pulse-to-position acquisition using fresh RS4 pitch telemetry."""
+
+    SAFE_TARGET_STATUSES = {"VALID", "PREDICTED"}
+
+    def __init__(self, timeout_s=PITCH_ACQUIRE_TIMEOUT_S,
+                 stale_s=PITCH_TELEMETRY_STALE_S,
+                 cumulative_limit_s=PITCH_MAX_CUMULATIVE_S):
+        if timeout_s <= 0 or stale_s <= 0 or cumulative_limit_s <= 0:
+            raise ValueError("pitch acquisition limits must be positive")
+        self.timeout_s = float(timeout_s)
+        self.stale_s = float(stale_s)
+        self.cumulative_limit_s = float(cumulative_limit_s)
+        self.selected_id = None
+        self.state = "IDLE"
+        self.started_at = None
+        self.pulse_until = None
+        self.pulse_duration_s = 0.0
+        self.pulse_command = 0
+        self.pulse_telemetry_at = None
+        self.cumulative_s = 0.0
+        self.final_reason = None
+
+    def select(self, aircraft_id):
+        if aircraft_id == self.selected_id:
+            return None
+        previous = self.selected_id
+        self.selected_id = aircraft_id
+        event = None
+        if previous and self.state in {"READY", "PULSE", "WAIT_TELEMETRY"}:
+            event = self._event("PITCH_ACQUIRE_DONE", previous, "ABORT", "TARGET_CHANGED")
+        self.state = "READY" if aircraft_id else "IDLE"
+        self.started_at = None
+        self.pulse_until = None
+        self.pulse_duration_s = 0.0
+        self.pulse_command = 0
+        self.pulse_telemetry_at = None
+        self.cumulative_s = 0.0
+        self.final_reason = None
+        return event
+
+    @staticmethod
+    def physical_pitch(raw_home_pitch, raw_current_pitch):
+        values = (raw_home_pitch, raw_current_pitch)
+        if not all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                   and math.isfinite(value) for value in values):
+            return None
+        return wrap180((float(raw_home_pitch) - float(raw_current_pitch)) / 10.0)
+
+    @staticmethod
+    def pulse_duration(error_deg):
+        magnitude = abs(error_deg)
+        if magnitude > 4.0:
+            return 0.40
+        if magnitude > 1.5:
+            return 0.20
+        if magnitude > 1.0:
+            return 0.10
+        return 0.0
+
+    def command_for(self, aircraft_id, target, raw_home_pitch, raw_current_pitch,
+                    telemetry_at, now_s):
+        selection_event = self.select(aircraft_id)
+        physical = self.physical_pitch(raw_home_pitch, raw_current_pitch)
+        desired = getattr(target, "target_pitch_relative_deg", None)
+        error = (None if physical is None or not isinstance(desired, (int, float))
+                 or isinstance(desired, bool) or not math.isfinite(desired)
+                 else float(desired) - physical)
+        if selection_event:
+            return PitchAcquireDecision(0, "ABORT", "TARGET_CHANGED", 0.0,
+                                        physical, error, selection_event)
+        if not aircraft_id:
+            return PitchAcquireDecision(0, "IDLE", physical_pitch_deg=physical,
+                                        error_deg=error)
+        if self.state == "ABORT":
+            return PitchAcquireDecision(0, self.state, self.final_reason, 0.0,
+                                        physical, error)
+        if self.state == "ACQUIRED":
+            if (self.final_reason != "ON_TARGET" or error is None
+                    or abs(error) <= 1.5):
+                return PitchAcquireDecision(0, self.state, self.final_reason, 0.0,
+                                            physical, error)
+            self.state = "READY"
+            self.started_at = None
+            self.pulse_until = None
+            self.pulse_duration_s = 0.0
+            self.pulse_command = 0
+            self.pulse_telemetry_at = None
+            self.cumulative_s = 0.0
+            self.final_reason = None
+        if (getattr(target, "status", None) not in self.SAFE_TARGET_STATUSES
+                or not getattr(target, "vertical_valid", False) or error is None):
+            # dump1090 may publish a selected aircraft's position before its
+            # pressure altitude. Zero tilt is mandatory while vertical data
+            # is unavailable, but that transient must not permanently latch
+            # acquisition before a later complete record arrives.
+            return PitchAcquireDecision(0, "READY", "TARGET_INVALID", 0.0,
+                                        physical, error)
+        if desired < -PITCH_FENCE_DEG or desired > PITCH_FENCE_DEG:
+            return self._finish("ABORT", "TARGET_OUTSIDE_PITCH_FENCE", physical, error)
+        if telemetry_at is None or now_s - telemetry_at > self.stale_s:
+            return self._finish("ABORT", "STALE_TELEMETRY", physical, error)
+        if physical <= -PITCH_FENCE_DEG or physical >= PITCH_FENCE_DEG:
+            return self._finish("ABORT", "FENCE", physical, error)
+        start_event = None
+        if self.started_at is None:
+            self.started_at = now_s
+            start_event = self._event("PITCH_ACQUIRE_START", aircraft_id,
+                                      "ACQUIRE", None)
+        if now_s - self.started_at >= self.timeout_s:
+            return self._finish("ABORT", "TIMEOUT", physical, error)
+        if self.state == "PULSE":
+            if now_s < self.pulse_until:
+                return PitchAcquireDecision(self.pulse_command, "ACQUIRE", None,
+                                            self.pulse_duration_s, physical, error,
+                                            start_event)
+            self.state = "WAIT_TELEMETRY"
+            # Mark telemetry observed at pulse completion and emit a neutral
+            # frame.  A later notification must arrive before another pulse.
+            self.pulse_telemetry_at = telemetry_at
+            return PitchAcquireDecision(0, "ACQUIRE", None, 0.0, physical,
+                                        error, start_event)
+        if self.state == "WAIT_TELEMETRY":
+            if telemetry_at <= self.pulse_telemetry_at:
+                return PitchAcquireDecision(0, "ACQUIRE", None, 0.0, physical,
+                                            error, start_event)
+            self.state = "READY"
+        if abs(error) <= PITCH_ON_TARGET_DEG:
+            return self._finish("ACQUIRED", "ON_TARGET", physical, error)
+        duration = self.pulse_duration(error)
+        if self.cumulative_s + duration > self.cumulative_limit_s + 1e-9:
+            return self._finish("ABORT", "TIMEOUT", physical, error)
+        self.state = "PULSE"
+        self.pulse_until = now_s + duration
+        self.pulse_duration_s = duration
+        self.pulse_command = PITCH_ACQUIRE_COMMAND if error > 0 else -PITCH_ACQUIRE_COMMAND
+        self.pulse_telemetry_at = telemetry_at
+        self.cumulative_s += duration
+        pulse_event = self._event("PITCH_ACQUIRE_PULSE", aircraft_id, "ACQUIRE", None)
+        pulse_event.update(tilt_command=self.pulse_command, pulse_duration_s=duration,
+                           physical_pitch_from_home_deg=physical,
+                           pitch_error_deg=error)
+        return PitchAcquireDecision(self.pulse_command, "ACQUIRE", None, duration,
+                                    physical, error, pulse_event or start_event)
+
+    def _event(self, name, aircraft_id, state, reason):
+        return {"name": name, "selected_icao": aircraft_id,
+                "pitch_state": state, "stop_reason": reason,
+                "cumulative_nonzero_s": self.cumulative_s}
+
+    def _finish(self, state, reason, physical, error):
+        self.state = state
+        self.final_reason = reason
+        event = self._event("PITCH_ACQUIRE_DONE", self.selected_id, state, reason)
+        event.update(physical_pitch_from_home_deg=physical, pitch_error_deg=error)
+        return PitchAcquireDecision(0, state, reason, 0.0, physical, error, event)
+
+
+def apply_pitch_acquisition(controller_output, decision):
+    """Override only tilt; the b72738c pan output remains byte-for-byte numeric."""
+    return replace(controller_output, tilt_command=decision.command)
+
+
+def build_joystick_frame(packet_builder, sequence, tilt, pan):
+    """Keep both axes in the single proven DJI virtual-joystick frame."""
+    return packet_builder(sequence, tilt, pan)
+
+
 def configured_effective_latency_s(value=None):
     raw = value if value is not None else os.environ.get("MIKEAIRCRAFT_EFFECTIVE_LATENCY_S", "0.25")
     latency = float(raw)
@@ -324,7 +543,8 @@ class Diagnostics:
     def __init__(self, path):
         self.handle = Path(path).open("a", encoding="utf-8", buffering=1)
 
-    def write(self, target, output, telemetry, bluetooth_state, optics):
+    def write(self, target, output, telemetry, bluetooth_state, optics,
+              camera=None, aircraft=None, pitch=None):
         row = target.as_dict()
         optics_fields = optics.as_dict()
         frame_x = normalized_frame_offset(output.yaw_error_deg, optics.horizontal_fov_deg)
@@ -358,6 +578,21 @@ class Diagnostics:
             "requested_pitch_rate_deg_s": output.requested_pitch_rate_deg_s,
             "final_rs4_pan_command": output.pan_command,
             "final_rs4_tilt_command": output.tilt_command,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "icao": target.aircraft_id,
+            "callsign": (aircraft or {}).get("callsign"),
+            "aircraft_altitude_m": (aircraft or {}).get("altitude_m"),
+            "aircraft_altitude_provenance": target.altitude_source,
+            "vertical_rate_ft_min": (aircraft or {}).get("vertical_rate_ft_min"),
+            "camera_home_elevation_deg": (camera.home_elevation_deg if camera else None),
+            "raw_home_pitch": telemetry.get("raw_home_pitch"),
+            "raw_current_pitch": telemetry.get("raw_current_pitch"),
+            "physical_pitch_from_home_deg": (pitch.physical_pitch_deg if pitch else None),
+            "acquisition_pitch_error_deg": (pitch.error_deg if pitch else None),
+            "pitch_state": (pitch.state if pitch else None),
+            "pitch_stop_reason": (pitch.reason if pitch else None),
+            "pitch_pulse_duration_s": (pitch.pulse_duration_s if pitch else 0.0),
+            "current_pan_command": output.pan_command,
             "bluetooth_state": bluetooth_state,
             "camera_optics": optics_fields,
             "slider_position": optics.slider_position_0_1,
@@ -389,9 +624,19 @@ class Diagnostics:
 
 async def run(args):
     # Imported only after explicit movement confirmation, so --check cannot touch BLE.
-    from bleak import BleakClient
+    from tower_joystick_v1 import EXPECTED_SHA256, load_controller, verify_sources
+
+    # Match tower_joystick_v1's proven Pi default. This directory contains the
+    # six hash-pinned controller files physically used by V2.
+    controller_directory = Path(
+        os.environ.get("MIKEAIRCRAFT_V2_CONTROLLER_DIR", "/home/mike"))
+    verify_sources(controller_directory)
+    for filename in EXPECTED_SHA256:
+        sys.modules.pop(Path(filename).stem, None)
+    lead = load_controller(controller_directory)
     import virtual_hill_local as local
-    import virtual_hill_tracker as ble
+    stable = lead.stable
+    ble = stable.geom.base
 
     camera = await asyncio.to_thread(load_camera_reference, args.camera_reference_url, args.pin)
     try:
@@ -423,6 +668,8 @@ async def run(args):
     protocol_responses = asyncio.Queue()
     protocol_response_count = 0
     write_lock = asyncio.Lock()
+    pitch_acquisition = AltitudePitchAcquisition()
+    aircraft_log = {}
 
     def record_disconnect(disconnected_client, occurred_at):
         nonlocal bluetooth_state, disconnected_at, disconnect_state
@@ -490,7 +737,8 @@ async def run(args):
             async with write_lock:
                 await asyncio.wait_for(
                     client.write_gatt_char(
-                        tx_char, ble.packet(sequence, tilt, pan), response=False), 2.0)
+                        tx_char, build_joystick_frame(ble.packet, sequence, tilt, pan),
+                        response=False), 2.0)
             written_at = time.monotonic()
             if first_write_at is None:
                 first_write_at = written_at
@@ -516,12 +764,50 @@ async def run(args):
                 await send_axes(0, 0)
             await asyncio.sleep(0.04)
 
+    async def emergency_stop():
+        """V2-style best-effort neutral, including one STOP-only reconnect."""
+        nonlocal sequence
+        if client_connected(client) and disconnected_at is None and tx_char is not None:
+            await stop_motion()
+            diagnostics.event("forced_neutral_stop", delivery="active_connection",
+                              tilt_command=0, pan_command=0, bluetooth_state=bluetooth_state)
+            return
+        recovery = None
+        try:
+            recovery = stable.BleakClient(ble.DEVICE, timeout=4)
+            await asyncio.wait_for(recovery.connect(), 4)
+            stop_tx = recovery.services.get_characteristic(ble.TX)
+            if stop_tx is None:
+                raise RuntimeError("RS4 STOP characteristic not found")
+            for _ in range(5):
+                sequence = (sequence + 1) & 0xFFFF
+                await asyncio.wait_for(recovery.write_gatt_char(
+                    stop_tx, build_joystick_frame(ble.packet, sequence, 0, 0),
+                    response=False), 0.5)
+                await asyncio.sleep(0.04)
+            diagnostics.event("forced_neutral_stop", delivery="stop_only_reconnect",
+                              tilt_command=0, pan_command=0, bluetooth_state=bluetooth_state)
+        except Exception as error:
+            diagnostics.event("forced_neutral_stop_failed", tilt_command=0, pan_command=0,
+                              bluetooth_state=bluetooth_state,
+                              exception_type=type(error).__name__, exception=str(error))
+        finally:
+            if recovery is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(recovery.disconnect(), 2)
+
     async def connect():
         nonlocal client, tx_char, home_yaw, home_pitch, bluetooth_state, connected_at
         bluetooth_state = "CONNECTING"
-        client = BleakClient(ble.DEVICE, timeout=20, disconnected_callback=disconnected)
+        client = stable.BleakClient(ble.DEVICE, timeout=20, disconnected_callback=disconnected)
         await asyncio.wait_for(client.connect(), 25)
-        tx_char = await prepare_rs4_gatt(client, ble, receive)
+        tx_char = client.services.get_characteristic(ble.TX)
+        if tx_char is None:
+            raise RuntimeError("RS4 TX characteristic not found")
+        # Preserve the physically proven tower_joystick_v1 lifecycle: resolve
+        # TX, issue repeated neutral frames, then establish notifications.
+        await stop_motion()
+        await asyncio.wait_for(client.start_notify(ble.RX, receive), 6)
         deadline = time.monotonic() + 5
         while measured_yaw is None and time.monotonic() < deadline:
             await asyncio.sleep(0.05)
@@ -535,7 +821,7 @@ async def run(args):
 
     async def poll_aircraft():
         """Keep network latency out of the proven 20 Hz RS4 write cadence."""
-        nonlocal selected_id
+        nonlocal selected_id, aircraft_log
         while True:
             requested_at = time.monotonic()
             try:
@@ -549,6 +835,10 @@ async def run(args):
                     selection = current_selection(engine)
                 new_id = selection and selection["aircraft_id"]
                 if new_id != selected_id:
+                    aircraft_log = {}
+                    diagnostics.event("direct_icao_selection_changed",
+                                      previous_icao=selected_id, new_icao=new_id,
+                                      pulse_eligible=bool(args.direct and new_id))
                     selected_id = new_id
                     source.select_aircraft(new_id)
                     adsb_intake.select_aircraft(new_id)
@@ -558,6 +848,18 @@ async def run(args):
                                      if clean_hex(item.get("hex")) == selected_id), None)
                     local_read_ms = utc_ms()
                     result = adsb_intake.ingest(feed, aircraft or {}, selected_id, local_read_ms)
+                    if result.observation:
+                        observation = result.observation
+                        altitude_m = (observation.altitude_ellipsoid_m
+                                      if observation.altitude_ellipsoid_m is not None
+                                      else observation.altitude_barometric_m)
+                        aircraft_log = {
+                            "callsign": str((aircraft or {}).get("flight")
+                                            or selection.get("callsign")
+                                            or selected_id).strip(),
+                            "altitude_m": altitude_m,
+                            "vertical_rate_ft_min": observation.vertical_rate_ft_min,
+                        }
                     accepted = bool(result.observation and source.update(result.observation))
                     result.diagnostics["estimator_accepted"] = accepted
                     diagnostics.event("adsb_source_observation", **result.diagnostics)
@@ -618,6 +920,27 @@ async def run(args):
             controller.correct_telemetry(relative_yaw, relative_pitch)
             output = controller.step(target, tick - last_tick)
             last_tick = tick
+            raw_home_pitch = int(round(home_pitch * 10))
+            raw_current_pitch = int(round(measured_pitch * 10))
+            pitch = pitch_acquisition.command_for(
+                selected_id if args.direct else None, target,
+                raw_home_pitch, raw_current_pitch, telemetry_at, tick)
+            if pitch.event:
+                event = dict(pitch.event)
+                event.update(raw_home_pitch=raw_home_pitch,
+                             raw_current_pitch=raw_current_pitch,
+                             measured_pitch_deg=measured_pitch,
+                             target_elevation_deg=target.target_elevation_deg,
+                             camera_home_elevation_deg=camera.home_elevation_deg,
+                             target_pitch_relative_deg=target.target_pitch_relative_deg,
+                             horizontal_range_m=target.horizontal_range_m,
+                             altitude_source=target.altitude_source,
+                             aircraft_altitude_m=aircraft_log.get("altitude_m"),
+                             vertical_rate_ft_min=aircraft_log.get("vertical_rate_ft_min"),
+                             current_pan_command=output.pan_command,
+                             bluetooth_state=bluetooth_state)
+                diagnostics.event(event.pop("name"), **event)
+            output = apply_pitch_acquisition(output, pitch)
             await send_axes(output.tilt_command * RS4_PITCH_SIGN,
                             output.pan_command * RS4_YAW_SIGN)
             diagnostics.write(target, output, {
@@ -630,7 +953,9 @@ async def run(args):
                 "effective_write_hz": effective_write_hz(
                     write_count, first_write_at, last_write_at),
                 "last_command": last_command,
-            }, bluetooth_state, optics)
+                "raw_home_pitch": raw_home_pitch,
+                "raw_current_pitch": raw_current_pitch,
+            }, bluetooth_state, optics, camera, aircraft_log, pitch)
             await asyncio.sleep(max(0.0, CONTROL_PERIOD_S - (time.monotonic() - tick)))
     finally:
         # Cleanup is deliberately best-effort and may never replace the first fault.
@@ -647,7 +972,7 @@ async def run(args):
             with contextlib.suppress(asyncio.CancelledError):
                 await responder
         with contextlib.suppress(Exception):
-            await stop_motion()
+            await emergency_stop()
         if client is not None:
             intentional_disconnect = True
             with contextlib.suppress(Exception):
