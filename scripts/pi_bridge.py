@@ -102,9 +102,9 @@ class PiBridge:
         self.refresh_process()
         release = self.release_manager.installed()
         pending = self.release_manager._read_pending()
-        reported_release = release or (pending and {"releaseId": pending.get("releaseId"),
-                                                     "serverCommit": pending.get("serverCommit"),
-                                                     "candidate": True})
+        reported_release = (({"releaseId": pending.get("releaseId"),
+                              "serverCommit": pending.get("serverCommit"),
+                              "candidate": True}) if pending else release)
         tracker_health = "FAULT" if self.tracker_state == "FAULT" or not self.tracker_check_ok else "HEALTHY"
         payload = json.dumps({"trackerState": self.tracker_state,
                               "currentAircraft": self.current_aircraft,
