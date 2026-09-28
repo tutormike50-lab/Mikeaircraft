@@ -40,12 +40,25 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
             "abc123", 2000.0, 2_000_000)
         self.assertEqual(geometric.altitude_source, "ADS_B_GEOMETRIC")
         self.assertAlmostEqual(geometric.altitude_ellipsoid_m, 1219.2)
-        barometric = observation_from_adsb(
-            {"lat": 50.0, "lon": 14.0, "seen_pos": 0.5, "alt_baro": 3900},
+        legacy = observation_from_adsb(
+            {"lat": 50.0, "lon": 14.0, "seen_pos": 0.5, "altitude": 3900},
             "abc123", 2000.0, 2_000_000)
-        self.assertEqual(barometric.altitude_source,
-                         "UNAVAILABLE_BAROMETRIC_NOT_SUBSTITUTED")
-        self.assertIsNone(barometric.altitude_ellipsoid_m)
+        self.assertEqual(legacy.altitude_source,
+                         "DUMP1090_LEGACY_PRESSURE_ALTITUDE_APPROXIMATE")
+        self.assertIsNone(legacy.altitude_ellipsoid_m)
+        self.assertAlmostEqual(legacy.altitude_barometric_m, 1188.72)
+        source = GeometryTargetSource(
+            CameraReference(50.001, 14.001, 300.0, 0.0, 0.0, 1))
+        self.assertTrue(source.update(legacy))
+        self.assertTrue(source.latest(1_999_500).vertical_valid)
+
+        for unusable in (None, "3900", float("nan")):
+            missing = observation_from_adsb(
+                {"lat": 50.0, "lon": 14.0, "seen_pos": 0.5, "altitude": unusable},
+                "abc123", 2000.0, 2_000_000)
+            self.assertEqual(missing.altitude_source, "UNAVAILABLE")
+            self.assertIsNone(missing.altitude_ellipsoid_m)
+            self.assertIsNone(missing.altitude_barometric_m)
 
     def test_frozen_source_keeps_identity_and_age_without_new_measurement(self):
         intake = AdsbObservationIntake()
