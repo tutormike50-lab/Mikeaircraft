@@ -94,9 +94,27 @@ class PanelTests(unittest.TestCase):
     def test_explicitly_saved_current_schema_is_applied(self):
         self.panel.transport = lambda _: dict(
             ok=True, connected=True, sessionId=self.panel.session_id,
-            savedBoresight=dict(enabled=True, schemaVersion=1, yawDeg=-0.35, pitchDeg=0.12))
+            savedBoresight=dict(enabled=True, schemaVersion=1, yawDeg=-0.35, pitchDeg=0.12,
+                                 cameraReferenceFingerprint='a' * 64))
         self.panel._exchange({})
         self.assertEqual(self.panel.correction(), (-0.35, 0.12))
+
+    def test_lock_rebase_has_no_effective_correction_jump(self):
+        self.panel.saved = dict(yawDeg=0.1, pitchDeg=0.3, enabled=True,
+                                cameraReferenceFingerprint='b' * 64)
+        self.panel.applied = dict(revision=4, pan=0.4, tilt=-0.2)
+        before = self.panel.correction()
+        self.panel.transport = lambda _: dict(
+            ok=True, connected=True, sessionId=self.panel.session_id, serverNow=1000,
+            savedBoresight=dict(enabled=True, schemaVersion=1, yawDeg=0.5, pitchDeg=0.1,
+                                 cameraReferenceFingerprint='b' * 64),
+            command=dict(revision=5, pan=0.0, tilt=0.0, rebase='save', expiresAt=1500))
+        self.panel._exchange({})
+        self.assertAlmostEqual(before[0], 0.5)
+        self.assertAlmostEqual(before[1], 0.1)
+        self.assertEqual(self.panel.correction(), (0.5, 0.1))
+        self.assertEqual(self.panel.applied['pan'], 0.0)
+        self.assertEqual(self.panel.applied['tilt'], 0.0)
 
 
 if __name__ == '__main__': unittest.main()

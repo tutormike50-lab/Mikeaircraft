@@ -14,7 +14,7 @@ function element() {
   };
 }
 function setup() {
-  const ids = Object.fromEntries(['framingPad','framingKnob','framingStatus','framingConnect','framingStop','framingReset','framingSpeed','framingPan','framingTilt','framingTarget','pin'].map(k => [k, element()]));
+  const ids = Object.fromEntries(['framingPad','framingKnob','framingStatus','framingConnect','framingStop','framingReset','framingLock','framingClear','framingSpeed','framingPan','framingTilt','framingTarget','pin'].map(k => [k, element()]));
   ids.pin.value = 'fake-pin'; ids.framingSpeed.value = 'normal';
   const buttons = ['ArrowLeft','ArrowUp','ArrowDown','ArrowRight'].map(key => ({ ...element(), dataset: { frameDirection: key } }));
   const document = { ...element(), hidden: false, getElementById: k => ids[k], querySelectorAll: () => buttons };
@@ -74,6 +74,16 @@ test('STOP is explicit and never claims physical confirmation', async () => {
   assert.equal(s.calls.at(-1).body.action, 'stop');
   assert.match(s.ids.framingStatus.textContent, /not physically confirmed/);
 });
+test('LOCK and CLEAR send explicit optical actions without claiming HOME changed', async () => {
+  const s = setup(); await s.ids.framingConnect.emit('click');
+  await s.ids.framingLock.emit('click');
+  assert.equal(s.calls.filter(c => c.body?.action === 'lock').at(-1).body.action, 'lock');
+  assert.match(s.ids.framingStatus.textContent, /HOME is unchanged/);
+  await new Promise(setImmediate);
+  await s.ids.framingClear.emit('click');
+  assert.equal(s.calls.filter(c => c.body?.action === 'clear').at(-1).body.action, 'clear');
+  assert.match(s.ids.framingStatus.textContent, /normal geometric target/);
+});
 test('centre trim requests gentle bounded steps toward zero', async () => {
   const s = setup();
   s.state({ applied: { revision: 4, pan: 1, tilt: -0.5 }, revision: 4 });
@@ -88,7 +98,7 @@ test('centre trim requests gentle bounded steps toward zero', async () => {
 test('existing panel still serves airport, priority and location controls', async () => {
   const handler = require('../api/control'); let html;
   await handler({}, { setHeader() {}, status() { return this; }, send(v) { html = v; } });
-  for (const name of ['airportGrid','priorityMessage','resetLocationButton','framingPad']) assert.ok(html.includes('id="'+name+'"'));
+  for (const name of ['airportGrid','priorityMessage','resetLocationButton','framingPad','framingLock','framingClear']) assert.ok(html.includes('id="'+name+'"'));
   const inline = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   new vm.Script(inline);
   assert.ok(html.includes('/control-joystick.js'));

@@ -5,6 +5,7 @@
   const pad = el('framingPad'), knob = el('framingKnob'), status = el('framingStatus');
   if (!pad) return;
   const connect = el('framingConnect'), stop = el('framingStop'), reset = el('framingReset');
+  const lock = el('framingLock'), clear = el('framingClear');
   const speed = el('framingSpeed'), pin = el('pin');
   const buttons = Array.from(document.querySelectorAll('[data-frame-direction]'));
   let state = null, checkedAt = 0, enabled = false, busy = false;
@@ -28,6 +29,8 @@
     pad.setAttribute('aria-disabled', String(!can));
     buttons.forEach(b => { b.disabled = !can; });
     reset.disabled = !can || (!resetting && !(state?.applied?.pan || state?.applied?.tilt));
+    lock.disabled = !can || Boolean(state?.command);
+    clear.disabled = busy;
     stop.disabled = !enabled || !state?.connected || state?.stopRequested;
     const signed = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '°';
     el('framingPan').textContent = signed(state?.applied?.pan || 0);
@@ -120,6 +123,29 @@
     if (!ready() || state.command) return;
     release(); resetting = true; lastStep = performance.now();
     message('Gently centring the framing trim…'); pump();
+  });
+  lock.addEventListener('click', async () => {
+    if (!ready() || state.command || busy) return;
+    release(); busy = true;
+    try {
+      const data = await request({ action: 'lock', sessionId: state.sessionId,
+        expectedRevision: state.revision });
+      accept(data);
+      message('Optical alignment locked. HOME is unchanged.');
+    } catch (error) { fail(error); }
+    finally { busy = false; paint(); if (enabled) pump(); }
+  });
+  clear.addEventListener('click', async () => {
+    if (busy) return;
+    release(); busy = true;
+    try {
+      const data = await request({ action: 'clear', sessionId: state?.sessionId || null,
+        expectedRevision: state?.revision ?? 0 });
+      if (state?.sessionId) accept(data);
+      else { state = data; paint(); }
+      message('Optical alignment cleared. Tracking uses the normal geometric target.');
+    } catch (error) { fail(error); }
+    finally { busy = false; paint(); if (enabled) pump(); }
   });
   function move(event) {
     const r = pad.getBoundingClientRect(), radius = r.width * 0.32;

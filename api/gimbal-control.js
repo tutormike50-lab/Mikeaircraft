@@ -1,11 +1,25 @@
 const { resolveRedisEnv } = require('../lib/services/redis');
-const { transition, view } = require('../lib/gimbal-control');
+const { transition, view, opticalTransition, cameraReferenceFingerprint } = require('../lib/gimbal-control');
+const { normaliseStoredSettings } = require('./settings');
 const { authorised } = require('../lib/control-auth');
 const KEY = 'mikeaircraft:gimbal:framing:v1';
+const BORESIGHT_KEY = 'mikeaircraft:gimbal:boresight:v1';
+const SETTINGS_KEY = 'mikeaircraft:control:settings';
 const CAS = `local old=redis.call('GET',KEYS[1]) or ''
 if old~=ARGV[1] then return 0 end
 redis.call('SET',KEYS[1],ARGV[2],'PX',15000)
 return 1`;
+
+const CAS_WITH_BORESIGHT = "local old=redis.call('GET',KEYS[1]) or ''\n" +
+  "if old~=ARGV[1] then return 0 end\n" +
+  "redis.call('SET',KEYS[1],ARGV[2],'PX',15000)\n" +
+  "redis.call('SET',KEYS[2],ARGV[3])\nreturn 1";
+
+function parseStored(raw) {
+  if (raw == null || raw === '') return null;
+  if (typeof raw === 'object') return raw;
+  try { return JSON.parse(raw); } catch { return null; }
+}
 
 async function command(args) {
   const { url, token } = resolveRedisEnv();
@@ -36,10 +50,30 @@ module.exports = async function handler(req, res) {
       const raw = stored == null ? '' : (typeof stored === 'string' ? stored : JSON.stringify(stored));
       const previous = raw ? JSON.parse(raw) : null;
       const now = Date.now();
-      if (req.method === 'GET') return res.status(200).json({ ok: true, ...view(previous, now) });
+      const [savedRaw, settingsRaw] = await Promise.all([
+        command(['GET', BORESIGHT_KEY]), command(['GET', SETTINGS_KEY])
+      ]);
+      const saved = parseStored(savedRaw);
+      const settings = normaliseStoredSettings(settingsRaw);
+      const cameraFingerprint = cameraReferenceFingerprint(settings.cameraLocation);
+      if (req.method === 'GET') return res.status(200).json({ ok: true, ...view(previous, now, saved, cameraFingerprint) });
+      if (body?.action === 'clear' && !view(previous, now).connected) {
+        const cleared = { enabled: false, schemaVersion: 1, yawDeg: 0, pitchDeg: 0, cameraReferenceFingerprint: null };
+        await command(['SET', BORESIGHT_KEY, JSON.stringify(cleared)]);
+        return res.status(200).json({ ok: true, ...view(previous, Date.now(), cleared, cameraFingerprint) });
+      }
+      if (body?.action === 'lock' || body?.action === 'clear') {
+        const optical = opticalTransition(previous, body, now, saved, cameraFingerprint);
+        const next = optical.state;
+        if (await command(['EVAL', CAS_WITH_BORESIGHT, '2', KEY, BORESIGHT_KEY,
+                           raw, JSON.stringify(next), JSON.stringify(optical.savedBoresight)])) {
+          return res.status(200).json({ ok: true, ...view(next, Date.now(), optical.savedBoresight, cameraFingerprint) });
+        }
+        continue;
+      }
       const next = transition(previous, body, now);
       if (await command(['EVAL', CAS, '1', KEY, raw, JSON.stringify(next)])) {
-        return res.status(200).json({ ok: true, ...view(next, Date.now()) });
+        return res.status(200).json({ ok: true, ...view(next, Date.now(), saved, cameraFingerprint) });
       }
     }
     return res.status(409).json({ ok: false, error: 'Controller updated; refresh before adjusting' });

@@ -25,11 +25,13 @@ import urllib.request
 
 from production_tracking import AircraftObservation, CameraReference, ControllerV1, GeometryTargetSource, wrap180
 from camera_optics import angular_tolerance_deg, camera_optics, normalized_frame_offset
+from control_panel_trim import PanelTrim
 
 
 CAMERA_REFERENCE_URL = "https://mikeaircraft.vercel.app/api/camera-reference"
 CAMERA_OPTICS_URL = "https://mikeaircraft.vercel.app/api/settings"
 DIRECT_TRACKER_URL = "https://mikeaircraft.vercel.app/api/direct-tracker"
+PANEL_URL = "https://mikeaircraft.vercel.app"
 CONTROL_PERIOD_S = 0.05
 ADS_B_POLL_S = 0.20
 TELEMETRY_MAX_AGE_S = 2.0
@@ -526,6 +528,18 @@ def apply_pitch_acquisition(controller_output, decision):
     return replace(controller_output, tilt_command=decision.command)
 
 
+def apply_optical_alignment(target, yaw_deg=0.0, pitch_deg=0.0):
+    """Add boresight only to an aircraft target; rates and HOME are immutable."""
+    if target.status == "HOME" or not target.aircraft_id:
+        return target
+    updates = {}
+    if target.horizontal_valid and target.target_yaw_relative_deg is not None:
+        updates["target_yaw_relative_deg"] = wrap180(target.target_yaw_relative_deg + yaw_deg)
+    if target.vertical_valid and target.target_pitch_relative_deg is not None:
+        updates["target_pitch_relative_deg"] = target.target_pitch_relative_deg + pitch_deg
+    return replace(target, **updates) if updates else target
+
+
 def build_joystick_frame(packet_builder, sequence, tilt, pan):
     """Keep both axes in the single proven DJI virtual-joystick frame."""
     return packet_builder(sequence, tilt, pan)
@@ -670,6 +684,8 @@ async def run(args):
     write_lock = asyncio.Lock()
     pitch_acquisition = AltitudePitchAcquisition()
     aircraft_log = {}
+    panel = PanelTrim(args.panel_url, args.pin) if args.direct else None
+    panel_ready = False
 
     def record_disconnect(disconnected_client, occurred_at):
         nonlocal bluetooth_state, disconnected_at, disconnect_state
@@ -879,6 +895,8 @@ async def run(args):
             await asyncio.sleep(2.0)
 
     try:
+        if panel is not None:
+            await asyncio.wait_for(asyncio.to_thread(panel.start), 4)
         await connect()
         responder = asyncio.create_task(service_protocol_requests())
         poller = asyncio.create_task(poll_aircraft())
@@ -915,11 +933,22 @@ async def run(args):
             if telemetry_at is None or tick - telemetry_at > TELEMETRY_MAX_AGE_S:
                 await stop_motion()
                 raise RuntimeError("RS4 telemetry stale; tracking stopped")
+            if panel is not None:
+                yaw_correction, pitch_correction = panel.correction()
+                target = apply_optical_alignment(target, yaw_correction, pitch_correction)
             relative_yaw = wrap180(measured_yaw - home_yaw)
             relative_pitch = -wrap180(measured_pitch - home_pitch)
             controller.correct_telemetry(relative_yaw, relative_pitch)
             output = controller.step(target, tick - last_tick)
             last_tick = tick
+            if panel is not None:
+                panel_ready = bool(
+                    selected_id and output.yaw_error_deg is not None
+                    and abs(output.yaw_error_deg) <= 2.0
+                    and (output.pitch_error_deg is None or abs(output.pitch_error_deg) <= 2.0))
+                panel.update("TRACKING" if selected_id else "RETURNING",
+                             selected_id or "", panel_ready,
+                             max(0.0, tick - telemetry_at), 0.0)
             raw_home_pitch = int(round(home_pitch * 10))
             raw_current_pitch = int(round(measured_pitch * 10))
             pitch = pitch_acquisition.command_for(
@@ -972,6 +1001,9 @@ async def run(args):
             responder.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await responder
+        if panel is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(asyncio.to_thread(panel.close), 4)
         with contextlib.suppress(Exception):
             await emergency_stop()
         if client is not None:
@@ -991,6 +1023,7 @@ def main(argv=None):
     parser.add_argument("--camera-optics-url", default=CAMERA_OPTICS_URL)
     parser.add_argument("--direct", action="store_true", help="use only the explicit Direct Tracker ICAO command")
     parser.add_argument("--direct-tracker-url", default=DIRECT_TRACKER_URL)
+    parser.add_argument("--panel-url", default=PANEL_URL)
     parser.add_argument("--effective-latency", type=configured_effective_latency_s,
                         default=configured_effective_latency_s(),
                         help="downstream aim latency in seconds (persistent env: MIKEAIRCRAFT_EFFECTIVE_LATENCY_S)")

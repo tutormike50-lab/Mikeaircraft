@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { transition: go, view } = require('../lib/gimbal-control');
+const { transition: go, view, opticalTransition, cameraReferenceFingerprint, activeBoresight } = require('../lib/gimbal-control');
 const sessionId = '01234567-89ab-cdef-0123-456789abcdef';
 function initial() { return go(null, { action: 'open', sessionId }, 1000); }
 function beat(s, values = {}, now = 1100) {
@@ -83,6 +83,52 @@ test('no transition touches HOME or broadcast settings', () => {
   const s = trim(beat(initial()), { home_yaw: 99, airport: 'LHR' });
   assert.equal(s.home_yaw, undefined); assert.equal(s.airport, undefined);
 });
+test('LOCK folds live trim into saved boresight without changing effective correction', () => {
+  let s = beat(initial());
+  s = trim(s, { pan: 0.2, tilt: -0.2 });
+  s = beat(s, { applied: { revision: 1, pan: 0.2, tilt: -0.2 } }, 1300);
+  const fingerprint = 'a'.repeat(64);
+  const saved = { enabled: true, schemaVersion: 1, yawDeg: 0.1, pitchDeg: 0.3,
+    cameraReferenceFingerprint: fingerprint };
+  const before = [saved.yawDeg + s.applied.pan, saved.pitchDeg + s.applied.tilt];
+  const result = opticalTransition(s, { action: 'lock', sessionId,
+    expectedRevision: s.revision }, 1400, saved, fingerprint);
+  assert.deepEqual([result.savedBoresight.yawDeg, result.savedBoresight.pitchDeg], [0.3, 0.1]);
+  assert.ok(Math.abs(result.savedBoresight.yawDeg + result.state.command.pan - before[0]) < 1e-9);
+  assert.ok(Math.abs(result.savedBoresight.pitchDeg + result.state.command.tilt - before[1]) < 1e-9);
+  assert.equal(result.state.command.rebase, 'save');
+});
+test('saved correction is aircraft-agnostic and CameraReference mismatch makes it inert', () => {
+  const cameraA = { lat: 50.1, lon: 14.1, altitudeM: 300,
+    calibrationCompletedAt: '2026-09-28T10:00:00.000Z', readiness: { complete: true },
+    orientation: { homeTrueAzimuthDeg: 200, homeElevationDeg: 2,
+      calibratedAt: '2026-09-28T10:00:00.000Z' } };
+  const fpA = cameraReferenceFingerprint(cameraA);
+  const saved = { enabled: true, schemaVersion: 1, yawDeg: 0.7, pitchDeg: -1.2,
+    cameraReferenceFingerprint: fpA };
+  assert.deepEqual(activeBoresight(saved, fpA), saved);
+  const fpB = cameraReferenceFingerprint({ ...cameraA, lat: 50.1001,
+    calibrationCompletedAt: '2026-09-28T11:00:00.000Z' });
+  assert.equal(activeBoresight(saved, fpB).enabled, false);
+  assert.equal(activeBoresight(saved, fpB).yawDeg, 0);
+  assert.equal(activeBoresight(saved, fpB).pitchDeg, 0);
+});
+test('CLEAR removes saved alignment and live trim residue', () => {
+  let s = beat(initial());
+  s = trim(s, { pan: 0.2, tilt: -0.1 });
+  s = beat(s, { applied: { revision: 1, pan: 0.2, tilt: -0.1 } }, 1300);
+  const fp = 'c'.repeat(64);
+  const saved = { enabled: true, schemaVersion: 1, yawDeg: 0.4, pitchDeg: 0.6,
+    cameraReferenceFingerprint: fp };
+  const result = opticalTransition(s, { action: 'clear', sessionId,
+    expectedRevision: s.revision }, 1400, saved, fp);
+  assert.equal(result.savedBoresight.enabled, false);
+  assert.equal(result.savedBoresight.yawDeg, 0);
+  assert.equal(result.savedBoresight.pitchDeg, 0);
+  assert.equal(result.state.command.pan, 0);
+  assert.equal(result.state.command.tilt, 0);
+  assert.equal(result.state.command.rebase, 'cancel');
+});
 // Handler tests mock Redis only: no deployment credentials or network.
 const handler = require('../api/gimbal-control');
 function response() { return { code: 200, setHeader() {}, status(c) { this.code = c; return this; }, json(v) { this.body = v; return this; } }; }
@@ -112,17 +158,20 @@ test('trusted-browser cookie authenticates without exposing the PIN to control A
     assert.equal(check.code, 200); assert.equal(check.body.ok, true);
   } finally { if (old === undefined) delete process.env.MIKEAIRCRAFT_CONTROL_PIN; else process.env.MIKEAIRCRAFT_CONTROL_PIN = old; }
 });
-test('handler uses atomic compare-and-set with no changes to the settings key', async () => {
+test('handler uses atomic compare-and-set and keeps settings read-only', async () => {
   const prior = { pin: process.env.MIKEAIRCRAFT_CONTROL_PIN, url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN, fetch: global.fetch };
   process.env.MIKEAIRCRAFT_CONTROL_PIN = 'unit-test-only';
   process.env.KV_REST_API_URL = 'https://fake.invalid'; process.env.KV_REST_API_TOKEN = 'fake';
-  let raw = null, collisions = 1;
+  const store = new Map(); let collisions = 1;
   global.fetch = async (_, options) => {
     const args = JSON.parse(options.body); let result;
-    if (args[0] === 'GET') { assert.equal(args[1], 'mikeaircraft:gimbal:framing:v1'); result = raw; }
-    else { assert.equal(args[0], 'EVAL'); assert.equal(args[3], 'mikeaircraft:gimbal:framing:v1');
+    if (args[0] === 'GET') result = store.get(args[1]) ?? null;
+    else {
+      assert.equal(args[0], 'EVAL');
+      assert.equal(args[3], 'mikeaircraft:gimbal:framing:v1');
+      const raw = store.get(args[3]) ?? '';
       if (collisions-- > 0) result = 0;
-      else { assert.equal(args[4], raw || ''); raw = args[5]; result = 1; }
+      else { assert.equal(args[4], raw); store.set(args[3], args[5]); result = 1; }
     }
     return { ok: true, json: async () => ({ result }) };
   };

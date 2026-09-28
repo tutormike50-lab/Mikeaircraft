@@ -41,7 +41,8 @@ class PanelTrim:
         self.reported_at = clock()
         self.report = dict(mode='WAITING', ready=False, target='', telemetryAge=999, tickAge=999)
         self.applied = dict(revision=0, pan=0.0, tilt=0.0)
-        self.saved = dict(yawDeg=0.0, pitchDeg=0.0, enabled=False)
+        self.saved = dict(yawDeg=0.0, pitchDeg=0.0, enabled=False,
+                          cameraReferenceFingerprint=None)
         self.pending = None
         self.deadline = 0
 
@@ -80,13 +81,18 @@ class PanelTrim:
         with self.lock:
             self.last_reply = self.clock()
             saved = data.get('savedBoresight') or {}
+            fingerprint = saved.get('cameraReferenceFingerprint')
             if (saved.get('enabled') is True and saved.get('schemaVersion') == 1
+                and isinstance(fingerprint, str) and len(fingerprint) == 64
+                and all(character in '0123456789abcdef' for character in fingerprint)
                 and all(isinstance(saved.get(k), (int, float)) and not isinstance(saved.get(k), bool)
                         and math.isfinite(saved[k]) and abs(saved[k]) <= 5
                         for k in ('yawDeg', 'pitchDeg'))):
-                self.saved = dict(yawDeg=float(saved['yawDeg']), pitchDeg=float(saved['pitchDeg']), enabled=True)
+                self.saved = dict(yawDeg=float(saved['yawDeg']), pitchDeg=float(saved['pitchDeg']),
+                                  enabled=True, cameraReferenceFingerprint=fingerprint)
             else:
-                self.saved = dict(yawDeg=0.0, pitchDeg=0.0, enabled=False)
+                self.saved = dict(yawDeg=0.0, pitchDeg=0.0, enabled=False,
+                                  cameraReferenceFingerprint=None)
             cmd = data.get('command')
             if cmd is not None:
                 remaining = (cmd['expiresAt'] - data['serverNow']) / 1000 - elapsed

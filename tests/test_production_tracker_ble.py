@@ -8,11 +8,11 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, client_connected,
+from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, apply_optical_alignment, client_connected,
                                 configured_effective_latency_s, effective_write_hz, make_disconnect_callback,
                                 observation_from_adsb, prepare_rs4_gatt,
                                 rs4_protocol_response)  # noqa: E402
-from production_tracking import CameraReference, GeometryTargetSource  # noqa: E402
+from production_tracking import CameraReference, GeometryTarget, GeometryTargetSource  # noqa: E402
 
 
 class FakeTx:
@@ -203,6 +203,42 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
         intentional = True
         callback(active)
         self.assertEqual(len(recorded), 1)
+
+    def test_optical_alignment_changes_position_only_and_never_home(self):
+        target = GeometryTarget(
+            1000, "abc123", 100.0, 5.0, 12.0, 3.0, 1.25, -0.4,
+            900, 1100, 100, 200, 5000.0, 5100.0, "ADS_B", "ADS_B_GEOMETRIC",
+            "ADS_B_GROUND_VECTOR", True, True, "VALID")
+        aligned = apply_optical_alignment(target, 0.75, -1.25)
+        self.assertAlmostEqual(aligned.target_yaw_relative_deg, 12.75)
+        self.assertAlmostEqual(aligned.target_pitch_relative_deg, 1.75)
+        self.assertEqual(aligned.target_yaw_rate_deg_s, target.target_yaw_rate_deg_s)
+        self.assertEqual(aligned.target_pitch_rate_deg_s, target.target_pitch_rate_deg_s)
+        self.assertEqual(aligned.aircraft_id, "abc123")
+
+        aircraft_b = GeometryTarget(
+            1001, "def456", 102.0, 6.0, 20.0, 4.0, -0.7, 0.2,
+            901, 1101, 100, 200, 6000.0, 6100.0, "ADS_B", "ADS_B_GEOMETRIC",
+            "ADS_B_GROUND_VECTOR", True, True, "VALID")
+        aligned_b = apply_optical_alignment(aircraft_b, 0.75, -1.25)
+        self.assertEqual(aligned_b.aircraft_id, "def456")
+        self.assertAlmostEqual(aligned_b.target_yaw_relative_deg, 20.75)
+        self.assertAlmostEqual(aligned_b.target_pitch_relative_deg, 2.75)
+
+        home = GeometryTarget(
+            1002, None, 90.0, 2.0, 0.0, 0.0, 0.0, 0.0,
+            None, 1102, None, None, None, None, "CAMERA_REFERENCE",
+            "CAMERA_REFERENCE", None, True, True, "HOME")
+        self.assertIs(apply_optical_alignment(home, 4.0, -3.0), home)
+        self.assertEqual(home.target_yaw_relative_deg, 0.0)
+        self.assertEqual(home.target_pitch_relative_deg, 0.0)
+
+    def test_zero_optical_alignment_is_numerically_baseline_equivalent(self):
+        target = GeometryTarget(
+            1000, "abc123", 100.0, 5.0, 12.0, 3.0, 1.25, -0.4,
+            900, 1100, 100, 200, 5000.0, 5100.0, "ADS_B", "ADS_B_GEOMETRIC",
+            "ADS_B_GROUND_VECTOR", True, True, "VALID")
+        self.assertEqual(apply_optical_alignment(target, 0.0, 0.0), target)
 
     async def test_proven_gatt_lifecycle_waits_notifies_then_resolves_ready_tx(self):
         events = []

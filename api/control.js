@@ -394,6 +394,8 @@ module.exports = async function handler(req, res) {
           <p id="framingStatus" role="status" aria-live="polite">Not connected. The Pi joystick-enabled tracker must be running first.</p>
           <button type="button" id="framingConnect" class="framing-button">CONNECT JOYSTICK</button>
           <button type="button" id="framingReset" class="framing-button" disabled>CENTRE TRIM</button>
+          <button type="button" id="framingLock" class="framing-button" disabled>LOCK OPTICAL ALIGNMENT</button>
+          <button type="button" id="framingClear" class="framing-button">CLEAR OPTICAL ALIGNMENT</button>
           <button type="button" id="framingStop" class="framing-button framing-stop" disabled>REQUEST STOP</button>
           <p class="location-note">Corrections are gently rate-limited and bounded to ±5° for this run. Release retains the trim; CENTRE TRIM smoothly returns it to zero. AUTO tracking remains authoritative and Tower HOME is unchanged. Network STOP is not a substitute for the gimbal’s physical stop.</p>
         </div>
