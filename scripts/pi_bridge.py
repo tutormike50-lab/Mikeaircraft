@@ -226,6 +226,11 @@ class PiBridge:
             if (control.get("owner") == "DIRECT_TRACKER" and
                     control.get("command") == "TRACKING" and control.get("aircraftId")):
                 self.start(int(control.get("generation") or 0), direct=True)
+            elif (control.get("owner") == "DIRECT_TRACKER" and
+                    control.get("command") == "STOPPED"):
+                if not (self.process is not None and self.process.poll() is None
+                        and self.process_mode == "DIRECT"):
+                    self.stop()
             elif control.get("owner") == "PRODUCTION" and control.get("command") == "TRACKING":
                 self.start(int(control.get("generation") or 0), direct=False)
             else:

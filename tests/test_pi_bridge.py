@@ -112,20 +112,21 @@ class PiBridgeTests(unittest.TestCase):
         self.assertIn("[REDACTED]", bridge.fault)
         report.assert_called_once_with(bridge.fault, flush=True)
 
-    def test_direct_mode_bypasses_production_and_stop_remains_authoritative(self):
+    def test_direct_stop_keeps_live_direct_tracker_running_for_home_return(self):
         calls = []
         bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
-        bridge.reconcile({"desired": "TRACKING", "generation": 8,
-                          "direct": {"command": "TRACKING", "generation": 2,
-                                     "aircraftId": "abc123",
-                                     "updatedAt": "2026-09-24T10:00:00Z"}})
+        bridge.reconcile({"desired": "STOPPED", "generation": 8,
+                          "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                                      "generation": 2, "aircraftId": "abc123"}})
         self.assertIn("--direct", calls[0])
-        with mock.patch.object(pi_bridge.os, "killpg", create=True):
-            bridge.reconcile({"desired": "TRACKING", "generation": 8,
-                              "direct": {"command": "STOPPED", "generation": 3,
-                                         "updatedAt": "2026-09-24T10:01:00Z"}})
-        self.assertEqual(bridge.tracker_state, "STOPPED")
-        self.assertIsNone(bridge.process)
+        process = bridge.process
+        with mock.patch.object(pi_bridge.os, "killpg", create=True) as killpg:
+            bridge.reconcile({"desired": "STOPPED", "generation": 8,
+                              "control": {"owner": "DIRECT_TRACKER", "command": "STOPPED",
+                                          "generation": 3, "aircraftId": None}})
+        killpg.assert_not_called()
+        self.assertIs(bridge.process, process)
+        self.assertEqual(bridge.process_mode, "DIRECT")
 
     def test_click_control_starts_direct_tracker_without_normal_start(self):
         calls = []

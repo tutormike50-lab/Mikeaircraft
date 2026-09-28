@@ -842,7 +842,7 @@ async def run(args):
                     selected_id = new_id
                     source.select_aircraft(new_id)
                     adsb_intake.select_aircraft(new_id)
-                    controller.reset_target(new_id) if new_id else None
+                    controller.reset_target(new_id)
                 if selected_id:
                     aircraft = next((item for item in feed.get("aircraft") or []
                                      if clean_hex(item.get("hex")) == selected_id), None)
@@ -940,7 +940,8 @@ async def run(args):
                              current_pan_command=output.pan_command,
                              bluetooth_state=bluetooth_state)
                 diagnostics.event(event.pop("name"), **event)
-            output = apply_pitch_acquisition(output, pitch)
+            if not (args.direct and selected_id is None):
+                output = apply_pitch_acquisition(output, pitch)
             await send_axes(output.tilt_command * RS4_PITCH_SIGN,
                             output.pan_command * RS4_YAW_SIGN)
             diagnostics.write(target, output, {

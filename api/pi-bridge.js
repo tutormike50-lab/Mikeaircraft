@@ -56,6 +56,14 @@ function effectiveControl(desired, direct) {
       aircraftId: direct.aircraftId
     };
   }
+  if (direct.command === "STOPPED" && direct.updatedAt) {
+    return {
+      owner: "DIRECT_TRACKER",
+      command: "STOPPED",
+      generation: direct.generation,
+      aircraftId: null
+    };
+  }
   return {
     owner: "PRODUCTION",
     command: desired.desired,
