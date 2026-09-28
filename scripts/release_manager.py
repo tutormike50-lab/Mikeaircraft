@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import pwd
 import py_compile
 import shutil
 import subprocess
@@ -81,8 +82,20 @@ class ReleaseManager:
         except (OSError, ValueError):
             return None
 
+    def _source_git_user(self):
+        if os.geteuid() != 0:
+            return None
+        owner_uid = self.source_dir.stat().st_uid
+        if owner_uid == 0:
+            return None
+        return pwd.getpwuid(owner_uid).pw_name
+
     def _git(self, *args, check=True):
-        return self.runner(["git", "-C", str(self.source_dir), *args], check=check,
+        command = ["git", "-C", str(self.source_dir), *args]
+        owner = self._source_git_user()
+        if owner:
+            command = ["/usr/sbin/runuser", "-u", owner, "--", *command]
+        return self.runner(command, check=check,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def _object(self, commit, path):
@@ -94,7 +107,9 @@ class ReleaseManager:
         current = self.installed() or {}
         if current.get("releaseId") == manifest["releaseId"] and current.get("serverCommit") == manifest["serverCommit"]:
             return None
-        self._git("fetch", "--quiet", "origin", manifest["serverCommit"])
+        # The service deliberately mounts the source checkout read-only.
+        # Deployment must pre-fetch the approved commit as the checkout owner;
+        # the root release agent only reads that pinned object.
         self._git("cat-file", "-e", manifest["serverCommit"] + "^{commit}")
         self.state_dir.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix="stage-", dir=self.state_dir))

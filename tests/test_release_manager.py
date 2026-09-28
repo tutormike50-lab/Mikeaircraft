@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import py_compile
 import tempfile
+import types
 import unittest
 
 MODULE = Path(__file__).parents[1] / "scripts" / "release_manager.py"
@@ -103,6 +104,26 @@ class ReleaseManagerTests(unittest.TestCase):
             manager.stage(manifest)
         self.assertEqual((self.root / "scripts/control_panel_trim.py").read_bytes(),
                          self.old["scripts/control_panel_trim.py"])
+
+    def test_root_reads_user_owned_source_via_runuser_without_fetch(self):
+        manager = release_manager.ReleaseManager(self.root, runner=self.runner)
+        manager._source_git_user = lambda: "mike"
+        commands = []
+
+        def runner(command, **kwargs):
+            commands.append(command)
+            if command[-2] == "show":
+                return Result(self.new[command[-1].split(":", 1)[1]])
+            return Result()
+
+        manager.runner = runner
+        pending = manager.stage(self.manifest)
+        self.assertTrue(commands)
+        self.assertTrue(all(command[:4] == ["/usr/sbin/runuser", "-u", "mike", "--"]
+                            for command in commands))
+        self.assertFalse(any("fetch" in command for command in commands))
+        self.assertTrue(any("cat-file" in command for command in commands))
+        manager.rollback(pending, "test complete")
 
     def test_git_source_and_runtime_install_are_separate(self):
         source = self.root / "source"
