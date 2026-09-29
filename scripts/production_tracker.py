@@ -536,7 +536,9 @@ def apply_framing_trim(target, pan_deg=0.0, tilt_deg=0.0):
     if target.horizontal_valid and target.target_yaw_relative_deg is not None:
         updates["target_yaw_relative_deg"] = wrap180(target.target_yaw_relative_deg + pan_deg)
     if target.vertical_valid and target.target_pitch_relative_deg is not None:
-        updates["target_pitch_relative_deg"] = target.target_pitch_relative_deg + tilt_deg
+        # PanelTrim defines positive TILT as camera framing UP.  The RS4
+        # relative-pitch convention is inverted, so UP subtracts pitch.
+        updates["target_pitch_relative_deg"] = target.target_pitch_relative_deg - tilt_deg
     return replace(target, **updates) if updates else target
 
 
@@ -935,6 +937,9 @@ async def run(args):
             relative_yaw = wrap180(measured_yaw - home_yaw)
             relative_pitch = -wrap180(measured_pitch - home_pitch)
             controller.correct_telemetry(relative_yaw, relative_pitch)
+            untrimmed_target_yaw = target.target_yaw_relative_deg
+            untrimmed_target_pitch = target.target_pitch_relative_deg
+            panel_pan_trim = panel_tilt_trim = 0.0
             if panel is not None:
                 telemetry_age = max(0.0, tick - telemetry_at)
                 near_aim = bool(
@@ -945,8 +950,8 @@ async def run(args):
                          or abs(target.target_pitch_relative_deg - relative_pitch) <= 2.0))
                 panel.update("TRACKING" if selected_id else "RETURNING",
                              selected_id or "", near_aim, telemetry_age, 0.0)
-                pan_trim, tilt_trim = panel.offsets()
-                target = apply_framing_trim(target, pan_trim, tilt_trim)
+                panel_pan_trim, panel_tilt_trim = panel.offsets()
+                target = apply_framing_trim(target, panel_pan_trim, panel_tilt_trim)
             output = controller.step(target, tick - last_tick)
             last_tick = tick
             raw_home_pitch = int(round(home_pitch * 10))

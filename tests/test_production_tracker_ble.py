@@ -8,11 +8,11 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, apply_framing_trim, client_connected,
+from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, apply_framing_trim, build_joystick_frame, client_connected,
                                 configured_effective_latency_s, effective_write_hz, make_disconnect_callback,
                                 observation_from_adsb, prepare_rs4_gatt,
                                 rs4_protocol_response)  # noqa: E402
-from production_tracking import CameraReference, GeometryTarget, GeometryTargetSource  # noqa: E402
+from production_tracking import CameraReference, ControllerV1, GeometryTarget, GeometryTargetSource  # noqa: E402
 
 
 class FakeTx:
@@ -213,10 +213,10 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(zero, target)
         right_up = apply_framing_trim(target, 0.25, 0.25)
         self.assertAlmostEqual(right_up.target_yaw_relative_deg, 12.25)
-        self.assertAlmostEqual(right_up.target_pitch_relative_deg, 3.25)
+        self.assertAlmostEqual(right_up.target_pitch_relative_deg, 2.75)
         left_down = apply_framing_trim(target, -0.25, -0.25)
         self.assertAlmostEqual(left_down.target_yaw_relative_deg, 11.75)
-        self.assertAlmostEqual(left_down.target_pitch_relative_deg, 2.75)
+        self.assertAlmostEqual(left_down.target_pitch_relative_deg, 3.25)
         self.assertEqual(right_up.target_yaw_rate_deg_s, target.target_yaw_rate_deg_s)
         self.assertEqual(right_up.target_pitch_rate_deg_s, target.target_pitch_rate_deg_s)
         self.assertEqual(right_up.aircraft_id, target.aircraft_id)
@@ -241,7 +241,42 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
         framed_b = apply_framing_trim(b, 0.2, -0.1)
         self.assertEqual(framed_b.aircraft_id, "bbbbbb")
         self.assertAlmostEqual(framed_b.target_yaw_relative_deg, 20.2)
-        self.assertAlmostEqual(framed_b.target_pitch_relative_deg, 3.9)
+        self.assertAlmostEqual(framed_b.target_pitch_relative_deg, 4.1)
+
+    def test_joystick_trim_changes_final_controller_and_rs4_packet(self):
+        base = GeometryTarget(
+            1000, "abc123", 100.0, 5.0, 0.0, 0.0, 0.0, 0.0,
+            900, 1100, 100, 200, 5000.0, 5100.0, "ADS_B", "ADS_B_GEOMETRIC",
+            "ADS_B_GROUND_VECTOR", True, True, "VALID")
+        baseline_controller = ControllerV1()
+        baseline_controller.aircraft_id = "abc123"
+        baseline_controller.mode = "TRACK"
+        baseline = baseline_controller.step(base, 0.05)
+        baseline_frame = build_joystick_frame(lambda seq, tilt, pan: (seq, tilt, pan), 10,
+                                              baseline.tilt_command, baseline.pan_command)
+
+        right = apply_framing_trim(base, 0.25, 0.0)
+        right_controller = ControllerV1()
+        right_controller.aircraft_id = "abc123"
+        right_controller.mode = "TRACK"
+        right_output = right_controller.step(right, 0.05)
+        right_frame = build_joystick_frame(lambda seq, tilt, pan: (seq, tilt, pan), 10,
+                                           right_output.tilt_command, right_output.pan_command)
+        self.assertGreater(right_output.yaw_error_deg, baseline.yaw_error_deg)
+        self.assertNotEqual(right_output.pan_command, baseline.pan_command)
+        self.assertNotEqual(right_frame, baseline_frame)
+
+        up = apply_framing_trim(base, 0.0, 2.0)
+        up_controller = ControllerV1()
+        up_controller.aircraft_id = "abc123"
+        up_controller.mode = "TRACK"
+        up_output = up_controller.step(up, 0.05)
+        up_frame = build_joystick_frame(lambda seq, tilt, pan: (seq, tilt, pan), 10,
+                                        up_output.tilt_command, up_output.pan_command)
+        self.assertLess(up.target_pitch_relative_deg, base.target_pitch_relative_deg)
+        self.assertLess(up_output.pitch_error_deg, baseline.pitch_error_deg)
+        self.assertNotEqual(up_output.tilt_command, baseline.tilt_command)
+        self.assertNotEqual(up_frame, baseline_frame)
 
     async def test_proven_gatt_lifecycle_waits_notifies_then_resolves_ready_tx(self):
         events = []
