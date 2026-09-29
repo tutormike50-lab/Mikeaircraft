@@ -46,21 +46,18 @@
         timestamps.add(fix.timestamp);fixes.push(fix);fixes.sort((a,b)=>a.timestamp-b.timestamp);return true;
       },
       snapshot(now){
-        const at=Number.isFinite(now)?now:Date.now(),elapsedSeconds=Math.max(0,(at-startMs)/1000),result=estimate(fixes,at),minimumMet=elapsedSeconds>=60&&fixes.length>=8;
+        const at=Number.isFinite(now)?now:Date.now(),elapsedSeconds=Math.max(0,(at-startMs)/1000),result=estimate(fixes,at),acceptableCount=result?result.acceptedCount:0,minimumMet=acceptableCount>=5;
         const centreMovementStable=Boolean(result&&result.centreMovement30sM!==null&&result.centreMovement30sM<=2),finalRadiusStable=Boolean(result&&result.centreMovement30sM===null&&result.final30sCount>=4&&result.final30sRadius95M<=2),stable=centreMovementStable||finalRadiusStable;
         const blockers=[];
         if(!fixes.length)blockers.push("NO GEOLOCATION UPDATES");
         else {
-          if(elapsedSeconds<60)blockers.push("MINIMUM 60 SECOND OBSERVATION NOT REACHED");
-          if(fixes.length<8)blockers.push("INSUFFICIENT ACCEPTED FIXES");
-          if(result&&result.reportedAccuracyM>10)blockers.push("INSUFFICIENT ACCURACY");
-          if(result&&result.clusterRadius95M>5)blockers.push("POSITION NOT STABLE: CLUSTER RADIUS");
-          if(result&&!stable)blockers.push("POSITION NOT STABLE: RECENT SPREAD");
+          if(acceptableCount<5)blockers.push("INSUFFICIENT ACCEPTED FIXES");
+          if(result&&result.grade==="REJECT")blockers.push("POSITION UNCERTAINTY TOO LARGE");
         }
         const acceptanceMet=blockers.length===0&&Boolean(result),lastFixAgeSeconds=fixes.length?Math.max(0,(at-fixes[fixes.length-1].timestamp)/1000):null;
-        let state=elapsedSeconds<60||fixes.length<8?"ACQUIRING":"STABILISING";
-        if(acceptanceMet)state="GOOD";else if(result&&result.horizontalUncertaintyM>20)state="POOR POSITION—KEEP WAITING";
-        return {startedAt:new Date(startMs).toISOString(),elapsedSeconds,receivedCount,totalCount:fixes.length,requiredCount:8,duplicateCount,staleCount,rejectedInputCount:duplicateCount+staleCount,lastRejectionReason,lastFixAgeSeconds,minimumMet,preferredMet:acceptanceMet,stable,qualityMet:acceptanceMet,acceptanceMet,state,blockingConditions:blockers,blockingCondition:blockers[0]||"NONE",estimate:result};
+        let state=acceptableCount<5?"ACQUIRING":"CHECKING";
+        if(acceptanceMet)state="GOOD";else if(result&&result.horizontalUncertaintyM>20)state="POOR POSITION—TRY AGAIN";
+        return {startedAt:new Date(startMs).toISOString(),elapsedSeconds,receivedCount,totalCount:fixes.length,requiredCount:5,duplicateCount,staleCount,rejectedInputCount:duplicateCount+staleCount,lastRejectionReason,lastFixAgeSeconds,minimumMet,preferredMet:acceptanceMet,stable,qualityMet:acceptanceMet,acceptanceMet,state,blockingConditions:blockers,blockingCondition:blockers[0]||"NONE",estimate:result};
       },
       fixes:()=>fixes.slice()
     };

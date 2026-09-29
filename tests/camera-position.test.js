@@ -56,76 +56,47 @@ test("session rejects duplicate and stale timestamps", () => {
   assert.equal(snapshot.staleCount, 1);
 });
 
-test("never accepts before 60 seconds and exactly 8 good fixes can pass", () => {
+test("five fresh acceptable fixes can complete without a long hold", () => {
   const start = 100000;
-  const session = sessionWith(start, stationaryFixes(start, 8));
-  assert.equal(session.snapshot(start + 59999).acceptanceMet, false);
-  assert.equal(session.snapshot(start + 60000).acceptanceMet, true);
-});
-
-test("7 genuinely fresh fixes fail", () => {
-  const start = 100000;
-  assert.equal(sessionWith(start, stationaryFixes(start, 7)).snapshot(start + 60000).acceptanceMet, false);
-});
-
-test("browser accuracy boundary is 10 m", () => {
-  const start = 100000;
-  assert.equal(sessionWith(start, stationaryFixes(start, 8, 10)).snapshot(start + 60000).acceptanceMet, true);
-  assert.equal(sessionWith(start, stationaryFixes(start, 8, 10.01)).snapshot(start + 60000).acceptanceMet, false);
-});
-
-test("cluster radius boundary is 5 m", () => {
-  const start = 100000;
-  const atBoundary = [0, 9.999, 0, 9.999, 0, 9.999, 0, 9.999].map((eastM, i) => fix(start, i * 60 / 7, eastM, 0));
-  const aboveBoundary = [0, 10.002, 0, 10.002, 0, 10.002, 0, 10.002].map((eastM, i) => fix(start, i * 60 / 7, eastM, 0));
-  assert.ok(estimate(atBoundary).clusterRadius95M <= 5);
-  assert.ok(estimate(aboveBoundary).clusterRadius95M > 5);
-  assert.equal(sessionWith(start, atBoundary).snapshot(start + 60000).acceptanceMet, true);
-  assert.equal(sessionWith(start, aboveBoundary).snapshot(start + 60000).acceptanceMet, false);
-});
-
-test("centre movement at or below 2 m provides stability", () => {
-  const start = 100000;
-  const fixes = [20, 25, 31, 36, 46, 51, 56, 60].map((seconds, i) => fix(start, seconds, i < 4 ? 0 : 1.999, 0));
-  const snapshot = sessionWith(start, fixes).snapshot(start + 60000);
-  assert.ok(snapshot.estimate.centreMovement30sM <= 2);
+  const session = sessionWith(start, stationaryFixes(start, 5, 4, 12));
+  const snapshot = session.snapshot(start + 12000);
   assert.equal(snapshot.acceptanceMet, true);
+  assert.equal(snapshot.requiredCount, 5);
+  assert.equal(snapshot.estimate.acceptedCount, 5);
 });
 
-test("four final-30-second fixes with radius at or below 2 m substitute when movement cannot be calculated", () => {
+test("four genuinely fresh acceptable fixes fail", () => {
   const start = 100000;
-  const fixes = [0, 5, 10, 15, 45, 50, 55, 60].map((seconds, i) => fix(start, seconds, i < 4 ? 0 : (i % 2) * 3.999, 0));
-  const snapshot = sessionWith(start, fixes).snapshot(start + 60000);
-  assert.equal(snapshot.estimate.centreMovement30sM, null);
-  assert.equal(snapshot.estimate.final30sCount, 4);
-  assert.ok(snapshot.estimate.final30sRadius95M <= 2);
-  assert.equal(snapshot.acceptanceMet, true);
+  assert.equal(sessionWith(start, stationaryFixes(start, 4, 4, 20)).snapshot(start + 20000).acceptanceMet, false);
 });
 
-test("180 seconds can accept fewer than 20 but at least 8 good fixes", () => {
+test("ordinary acquisition accuracy is accepted while clearly poor uncertainty rejects", () => {
   const start = 100000;
-  const times = [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 151, 156, 166, 171, 180];
-  const session = sessionWith(start, times.map((seconds, i) => fix(start, seconds, (i % 3 - 1) * .2, (i % 2) * .2, 6.8)));
-  assert.equal(session.snapshot(start + 180000).acceptanceMet, true);
+  assert.equal(sessionWith(start, stationaryFixes(start, 5, 20, 20)).snapshot(start + 20000).acceptanceMet, true);
+  const poor = sessionWith(start, stationaryFixes(start, 5, 20.1, 20)).snapshot(start + 20000);
+  assert.equal(poor.acceptanceMet, false);
+  assert.equal(poor.blockingCondition, "POSITION UNCERTAINTY TOO LARGE");
 });
 
-test("required-condition failures remain rejected at 180 seconds", () => {
+test("spatial outliers do not count toward the five acceptable fixes", () => {
   const start = 100000;
-  const tooFew = sessionWith(start, stationaryFixes(start, 7, 4, 180)).snapshot(start + 180000);
-  const unstable = [0, 30, 60, 90, 151, 156, 166, 171].map((seconds, i) => fix(start, seconds, i < 6 ? 0 : 6, 0));
-  assert.equal(tooFew.acceptanceMet, false);
-  assert.equal(sessionWith(start, unstable).snapshot(start + 180000).acceptanceMet, false);
+  const good = stationaryFixes(start, 4, 4, 20);
+  good.push(fix(start, 19, 250, -180, 4));
+  const snapshot = sessionWith(start, good).snapshot(start + 20000);
+  assert.equal(snapshot.estimate.acceptedCount, 4);
+  assert.equal(snapshot.estimate.rejectedCount, 1);
+  assert.equal(snapshot.acceptanceMet, false);
+  assert.equal(snapshot.blockingCondition, "INSUFFICIENT ACCEPTED FIXES");
 });
 
 test("snapshot reports the exact condition blocking acceptance", () => {
   const start = 100000;
-  const inaccurate = sessionWith(start, stationaryFixes(start, 8, 10.01)).snapshot(start + 60000);
-  assert.equal(inaccurate.blockingCondition, "INSUFFICIENT ACCURACY");
-  assert.deepEqual(inaccurate.blockingConditions, ["INSUFFICIENT ACCURACY"]);
-  assert.equal(inaccurate.receivedCount, 8);
-  assert.equal(inaccurate.requiredCount, 8);
+  const tooFew = sessionWith(start, stationaryFixes(start, 4, 4, 20)).snapshot(start + 20000);
+  assert.equal(tooFew.blockingCondition, "INSUFFICIENT ACCEPTED FIXES");
+  assert.equal(tooFew.receivedCount, 4);
+  assert.equal(tooFew.requiredCount, 5);
 
-  const empty = createSession(start).snapshot(start + 60000);
+  const empty = createSession(start).snapshot(start + 30000);
   assert.equal(empty.blockingCondition, "NO GEOLOCATION UPDATES");
   assert.equal(empty.lastFixAgeSeconds, null);
 });

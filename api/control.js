@@ -787,10 +787,10 @@ module.exports = async function handler(req, res) {
       const estimate = snapshot.estimate;
       calibrationState.textContent = snapshot.state;
       calibrationState.className = "calibration-state " + (snapshot.state === "GOOD" ? "good" : snapshot.state.indexOf("POOR") === 0 ? "bad" : "warn");
-      calibrationProgress.style.width = Math.min(100, snapshot.elapsedSeconds / 180 * 100) + "%";
+      calibrationProgress.style.width = Math.min(100, snapshot.elapsedSeconds / 30 * 100) + "%";
       calibrationCounts.textContent = snapshot.totalCount + " fresh fixes · " + Math.floor(snapshot.elapsedSeconds) + " seconds";
       calibrationEngineering.textContent = estimate
-        ? "State: " + snapshot.state + " · elapsed: " + Math.floor(snapshot.elapsedSeconds) + " / 180 s" +
+        ? "State: " + snapshot.state + " · elapsed: " + Math.floor(snapshot.elapsedSeconds) + " / 30 s" +
           "\\nFixes received: " + snapshot.receivedCount + " · accepted: " + estimate.acceptedCount + " / " + snapshot.requiredCount + " required · rejected: " + (snapshot.rejectedInputCount + estimate.rejectedCount) +
           "\\nLast rejection: " + snapshot.lastRejectionReason + " · last fix age: " + (snapshot.lastFixAgeSeconds === null ? "none" : snapshot.lastFixAgeSeconds.toFixed(1) + " s") +
           "\\nPhone reported accuracy: ±" + estimate.reportedAccuracyM.toFixed(1) + " m" +
@@ -799,7 +799,7 @@ module.exports = async function handler(req, res) {
           "\\nLast-30-second centre movement: " + (estimate.centreMovement30sM === null ? "calculating" : estimate.centreMovement30sM.toFixed(1) + " m") +
           "\\nConservative uncertainty: ±" + estimate.horizontalUncertaintyM.toFixed(1) + " m · " + estimate.grade +
           "\\nBLOCKING: " + snapshot.blockingConditions.join(" · ")
-        : "State: " + snapshot.state + " · elapsed: " + Math.floor(snapshot.elapsedSeconds) + " / 180 s" +
+        : "State: " + snapshot.state + " · elapsed: " + Math.floor(snapshot.elapsedSeconds) + " / 30 s" +
           "\\nFixes received: " + snapshot.receivedCount + " · accepted: 0 / " + snapshot.requiredCount + " required · rejected: " + snapshot.rejectedInputCount +
           "\\nLast rejection: " + snapshot.lastRejectionReason +
           "\\nBLOCKING: " + snapshot.blockingCondition;
@@ -970,7 +970,7 @@ module.exports = async function handler(req, res) {
       calibrationTarget.classList.add("active");
       calibrationTarget.setAttribute("aria-hidden", "false");
       calibrationSession = CameraPositionCalibration.createSession(Date.now());
-      setLocationMessage("Keep the crosshair against the camera reference point. Collection takes at least 60 seconds and continues up to 180 seconds if needed.", "warn");
+      setLocationMessage("Keep the crosshair against the camera reference point. Collection completes as soon as 5 fresh acceptable fixes are available, with a 30 second maximum.", "warn");
 
       locationWatchId = navigator.geolocation.watchPosition(
         (position) => {
@@ -1000,7 +1000,7 @@ module.exports = async function handler(req, res) {
         renderCalibration(snapshot);
         cameraLocationStatus.textContent = snapshot.state;
         if (snapshot.elapsedSeconds >= 30 && snapshot.receivedCount === 0) completeCalibration(true);
-        else if (snapshot.elapsedSeconds >= 180) completeCalibration(true);
+        else if (snapshot.elapsedSeconds >= 30) completeCalibration(true);
         else if (snapshot.acceptanceMet) completeCalibration(false);
       }, 1000);
     }

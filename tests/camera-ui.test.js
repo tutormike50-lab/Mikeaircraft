@@ -11,6 +11,9 @@ test("control panel exposes crosshair workflow and continuous fresh geolocation"
   assert.match(html, /BLOCKING:/);
   assert.match(html, /snapshot\.blockingCondition/);
   assert.match(html, /snapshot\.elapsedSeconds >= 30 && snapshot\.receivedCount === 0/);
+  assert.match(html, /snapshot\.elapsedSeconds >= 30\) completeCalibration\(true\)/);
+  assert.match(html, /5 fresh acceptable fixes/);
+  assert.doesNotMatch(html, /180 seconds/);
   assert.match(html, /navigator\.geolocation\.watchPosition/);
   assert.match(html, /enableHighAccuracy: true/);
   assert.match(html, /maximumAge: 0/);
