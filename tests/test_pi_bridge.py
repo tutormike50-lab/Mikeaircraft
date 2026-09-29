@@ -12,6 +12,13 @@ pi_bridge = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(pi_bridge)
 
 
+
+class V2ReleaseIdentityTests(unittest.TestCase):
+    def test_bridge_release_marker_follows_runtime_root(self):
+        source = (Path(__file__).resolve().parents[1] / "scripts" / "pi_bridge.py").read_text()
+        self.assertIn("ReleaseManager(self.repo_dir, self.repo_dir)", source)
+
+
 class FakeInput:
     def __init__(self): self.value = ""
     def write(self, value): self.value += value

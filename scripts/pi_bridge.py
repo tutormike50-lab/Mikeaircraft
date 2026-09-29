@@ -82,7 +82,7 @@ class PiBridge:
         self.attempted_generation = None
         self.process_mode = None
         self.telemetry = None
-        self.release_manager = ReleaseManager(self.repo_dir)
+        self.release_manager = ReleaseManager(self.repo_dir, self.repo_dir)
         self.health_path = self.repo_dir / "var" / "releases" / "bridge-health.json"
         self.tracker_check_ok, self.tracker_check_detail = self._check_tracker()
 
