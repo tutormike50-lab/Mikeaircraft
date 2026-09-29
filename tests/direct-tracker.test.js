@@ -28,6 +28,14 @@ test('ADS-B and automatic ribbon updates cannot replace the locked ICAO', async 
   assert.equal(lock.lockedIcao, 'abc123');
 });
 
+test('ESTABLISH HOME is an explicit direct command and clears any lock', async () => {
+  const commands = [], lock = radar.createDirectLock(async command => commands.push(command));
+  await lock.select({ hex: 'abc123', callsign: 'ONE1' });
+  await lock.establishHome();
+  assert.equal(lock.lockedIcao, null);
+  assert.deepEqual(commands.at(-1), { command: 'ESTABLISH_HOME' });
+});
+
 test('STOP clears the direct lock and sends an explicit STOPPED command', async () => {
   const commands = [], lock = radar.createDirectLock(async command => commands.push(command));
   await lock.select({ hex: 'abc123', callsign: 'ONE1' });
@@ -45,12 +53,14 @@ test('direct control validates ICAO and never accepts implicit target selection'
 test('standalone page is click-to-lock with an explicit STOP/HOME control', async () => {
   const handler = require('../api/direct-tracker-page'); let html;
   await handler({}, { setHeader() {}, status() { return this; }, send(value) { html = value; } });
-  for (const id of ['radarCanvas','owner','selected','stopTracking','distance','rawAge','horizon','stateTime','angles','relative']) assert.ok(html.includes('id="'+id+'"'));
+  for (const id of ['radarCanvas','owner','selected','homeReference','establishHome','stopTracking','distance','rawAge','horizon','stateTime','angles','relative']) assert.ok(html.includes('id="'+id+'"'));
   for (const id of ['track','home']) assert.ok(!html.includes('id="'+id+'"'));
   assert.match(html, /GIMBAL OWNER: DIRECT TRACKER/);
   assert.ok(html.includes('/direct-tracker.js'));
   const client = fs.readFileSync(require.resolve('../public/direct-tracker.js'), 'utf8');
   assert.ok(client.includes('/api/direct-tracker'));
+  assert.ok(client.includes("homeReferenceState==='UNVERIFIED'"));
+  assert.ok(client.includes('HOME reference must be established before tracking.'));
   assert.ok(!client.includes('currentAircraft'));
   assert.ok(!client.includes('nextIn'));
 });
@@ -72,6 +82,14 @@ test('a direct click becomes the explicit effective Pi control command', () => {
     directState(JSON.stringify({ command: 'TRACKING', aircraftId: 'abc123', generation: 7, updatedAt: '2026-09-24T12:00:00Z' }))
   );
   assert.deepEqual(control, { owner: 'DIRECT_TRACKER', command: 'TRACKING', generation: 7, aircraftId: 'abc123' });
+});
+
+test('explicit ESTABLISH HOME becomes the effective Pi control command', () => {
+  const control = bridgeApi.effectiveControl(
+    { desired: 'STOPPED', generation: 999 },
+    directState(JSON.stringify({ command: 'ESTABLISH_HOME', generation: 8, updatedAt: '2026-09-24T12:00:30Z' }))
+  );
+  assert.deepEqual(control, { owner: 'DIRECT_TRACKER', command: 'ESTABLISH_HOME', generation: 8, aircraftId: null });
 });
 
 test('explicit Direct STOP remains the effective control command', () => {

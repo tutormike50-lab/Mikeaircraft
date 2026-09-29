@@ -10,6 +10,7 @@ modified.
 import argparse
 import asyncio
 import contextlib
+from collections import deque
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
@@ -43,6 +44,10 @@ PITCH_ON_TARGET_DEG = 1.0
 PITCH_MAX_CUMULATIVE_S = 2.0
 PITCH_ACQUIRE_TIMEOUT_S = 8.0
 PITCH_TELEMETRY_STALE_S = 2.5
+HOME_CAPTURE_TIMEOUT_S = 6.0
+HOME_SAMPLE_WINDOW_S = 3.0
+HOME_SAMPLE_MIN_SPAN_S = 0.2
+HOME_SETTLED_TOLERANCE_DEG = 0.25
 
 RS4_PROTOCOL_REQUESTS = {
     (0x04, 0x02, 0x00, 0x04, 0x38),
@@ -60,6 +65,24 @@ class BleLifecycleError(RuntimeError):
         suffix = (f"; disconnect_monotonic_s={disconnected_at:.6f}"
                   if disconnected_at is not None else "")
         super().__init__(f"BLE stage={stage}: {detail}{suffix}")
+
+
+def settled_home_pose(samples, now_s, telemetry_max_age_s=TELEMETRY_MAX_AGE_S):
+    """Return a stable fresh RS4 pose, or None until HOME can be established."""
+    recent = [sample for sample in samples
+              if 0.0 <= now_s - sample[0] <= HOME_SAMPLE_WINDOW_S]
+    if len(recent) < 3 or now_s - recent[-1][0] > telemetry_max_age_s:
+        return None
+    if recent[-1][0] - recent[0][0] < HOME_SAMPLE_MIN_SPAN_S:
+        return None
+    yaw, pitch = recent[-1][1], recent[-1][2]
+    if not all(math.isfinite(value) for value in (yaw, pitch)):
+        return None
+    if any(abs(wrap180(sample[1] - yaw)) > HOME_SETTLED_TOLERANCE_DEG or
+           abs(wrap180(sample[2] - pitch)) > HOME_SETTLED_TOLERANCE_DEG
+           for sample in recent):
+        return None
+    return yaw, pitch
 
 
 def dji_crc(data):
@@ -560,7 +583,7 @@ class Diagnostics:
         self.handle = Path(path).open("a", encoding="utf-8", buffering=1)
 
     def write(self, target, output, telemetry, bluetooth_state, optics,
-              camera=None, aircraft=None, pitch=None):
+              camera=None, aircraft=None, pitch=None, home_reference_state=None):
         row = target.as_dict()
         optics_fields = optics.as_dict()
         frame_x = normalized_frame_offset(output.yaw_error_deg, optics.horizontal_fov_deg)
@@ -610,6 +633,7 @@ class Diagnostics:
             "pitch_pulse_duration_s": (pitch.pulse_duration_s if pitch else 0.0),
             "current_pan_command": output.pan_command,
             "bluetooth_state": bluetooth_state,
+            "home_reference_state": home_reference_state,
             "camera_optics": optics_fields,
             "slider_position": optics.slider_position_0_1,
             "equivalent_focal_length_mm": optics.equivalent_focal_length_mm,
@@ -667,7 +691,9 @@ async def run(args):
     sequence = 0xE100
     measured_yaw = measured_pitch = None
     home_yaw = home_pitch = None
+    home_reference_state = "UNVERIFIED"
     telemetry_at = None
+    telemetry_samples = deque(maxlen=256)
     selected_id = None
     bluetooth_state = "DISCONNECTED"
     diagnostics = Diagnostics(args.log)
@@ -724,6 +750,7 @@ async def run(args):
                 continue
             measured_pitch, measured_yaw = pitch_raw / 10.0, yaw_raw / 10.0
             telemetry_at = time.monotonic()
+            telemetry_samples.append((telemetry_at, measured_yaw, measured_pitch))
 
     async def service_protocol_requests():
         nonlocal protocol_response_count
@@ -814,7 +841,7 @@ async def run(args):
                     await asyncio.wait_for(recovery.disconnect(), 2)
 
     async def connect():
-        nonlocal client, tx_char, home_yaw, home_pitch, bluetooth_state, connected_at
+        nonlocal client, tx_char, bluetooth_state, connected_at
         bluetooth_state = "CONNECTING"
         client = stable.BleakClient(ble.DEVICE, timeout=20, disconnected_callback=disconnected)
         await asyncio.wait_for(client.connect(), 25)
@@ -830,11 +857,29 @@ async def run(args):
             await asyncio.sleep(0.05)
         if measured_yaw is None:
             raise RuntimeError("RS4 telemetry unavailable")
-        home_yaw, home_pitch = measured_yaw, measured_pitch
-        controller.estimated_yaw_deg = controller.estimated_pitch_deg = 0.0
         bluetooth_state = "CONNECTED"
         connected_at = time.monotonic()
         await stop_motion()
+
+    async def establish_home():
+        nonlocal home_yaw, home_pitch, home_reference_state
+        deadline = time.monotonic() + HOME_CAPTURE_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if disconnected_at is not None or not client_connected(client):
+                raise BleLifecycleError("home_establish", "RS4 disconnected", disconnected_at)
+            pose = settled_home_pose(telemetry_samples, time.monotonic())
+            if pose is not None:
+                if home_yaw is not None or home_pitch is not None:
+                    raise RuntimeError("HOME reference is immutable for this tracker session")
+                home_yaw, home_pitch = pose
+                controller.estimated_yaw_deg = controller.estimated_pitch_deg = 0.0
+                home_reference_state = "HOME"
+                diagnostics.event("home_reference_established",
+                                  home_reference_state=home_reference_state,
+                                  home_yaw=home_yaw, home_pitch=home_pitch)
+                return
+            await asyncio.sleep(0.05)
+        raise RuntimeError("HOME_REFERENCE_UNVERIFIED: fresh settled RS4 telemetry required")
 
     async def poll_aircraft():
         """Keep network latency out of the proven 20 Hz RS4 write cadence."""
@@ -899,6 +944,12 @@ async def run(args):
         if panel is not None:
             await asyncio.wait_for(asyncio.to_thread(panel.start), 4)
         await connect()
+        if args.establish_home:
+            await establish_home()
+        else:
+            diagnostics.event("home_reference_unverified",
+                              home_reference_state=home_reference_state)
+            raise RuntimeError("HOME_REFERENCE_UNVERIFIED: establish HOME before tracking")
         responder = asyncio.create_task(service_protocol_requests())
         poller = asyncio.create_task(poll_aircraft())
         optics_poller = asyncio.create_task(poll_optics())
@@ -931,6 +982,9 @@ async def run(args):
             if responder.done():
                 responder.result()
             target = source.latest(now_ms)
+            if home_yaw is None or home_pitch is None:
+                await stop_motion()
+                raise RuntimeError("HOME_REFERENCE_UNVERIFIED: tracking blocked")
             if telemetry_at is None or tick - telemetry_at > TELEMETRY_MAX_AGE_S:
                 await stop_motion()
                 raise RuntimeError("RS4 telemetry stale; tracking stopped")
@@ -953,6 +1007,12 @@ async def run(args):
                 panel_pan_trim, panel_tilt_trim = panel.offsets()
                 target = apply_framing_trim(target, panel_pan_trim, panel_tilt_trim)
             output = controller.step(target, tick - last_tick)
+            if selected_id:
+                home_reference_state = "VERIFIED"
+            elif output.state == "HOLD_HOME":
+                home_reference_state = "HOME"
+            else:
+                home_reference_state = "RETURNING"
             last_tick = tick
             raw_home_pitch = int(round(home_pitch * 10))
             raw_current_pitch = int(round(measured_pitch * 10))
@@ -990,7 +1050,8 @@ async def run(args):
                 "last_command": last_command,
                 "raw_home_pitch": raw_home_pitch,
                 "raw_current_pitch": raw_current_pitch,
-            }, bluetooth_state, optics, camera, aircraft_log, pitch)
+            }, bluetooth_state, optics, camera, aircraft_log, pitch,
+                              home_reference_state)
             await asyncio.sleep(max(0.0, CONTROL_PERIOD_S - (time.monotonic() - tick)))
     finally:
         # Cleanup is deliberately best-effort and may never replace the first fault.
@@ -1027,6 +1088,8 @@ def main(argv=None):
     parser.add_argument("--camera-reference-url", default=CAMERA_REFERENCE_URL)
     parser.add_argument("--camera-optics-url", default=CAMERA_OPTICS_URL)
     parser.add_argument("--direct", action="store_true", help="use only the explicit Direct Tracker ICAO command")
+    parser.add_argument("--establish-home", action="store_true",
+                        help="capture fresh settled RS4 telemetry as immutable HOME for this session")
     parser.add_argument("--direct-tracker-url", default=DIRECT_TRACKER_URL)
     parser.add_argument("--panel-url", default=PANEL_URL)
     parser.add_argument("--effective-latency", type=configured_effective_latency_s,

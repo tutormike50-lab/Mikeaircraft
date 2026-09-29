@@ -48,6 +48,14 @@ function cleanText(value, length) {
 }
 
 function effectiveControl(desired, direct) {
+  if (direct.command === "ESTABLISH_HOME") {
+    return {
+      owner: "DIRECT_TRACKER",
+      command: "ESTABLISH_HOME",
+      generation: direct.generation,
+      aircraftId: null
+    };
+  }
   if (direct.command === "TRACKING" && direct.aircraftId) {
     return {
       owner: "DIRECT_TRACKER",
@@ -104,6 +112,7 @@ module.exports = async function handler(req, res) {
       trackerState: body.trackerState,
       currentAircraft: cleanText(body.currentAircraft, 80),
       rs4State: cleanText(body.rs4State, 80),
+      homeReferenceState: new Set(["UNVERIFIED", "HOME", "VERIFIED", "RETURNING"]).has(body.homeReferenceState) ? body.homeReferenceState : "UNVERIFIED",
       fault: cleanText(body.fault, 300),
       telemetry: body.telemetry && typeof body.telemetry === "object" ? body.telemetry : null
       ,release: body.release && typeof body.release === "object" ? body.release : null

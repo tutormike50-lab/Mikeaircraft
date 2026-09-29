@@ -78,6 +78,7 @@ class PiBridge:
         self.tracker_state = "STOPPED"
         self.current_aircraft = None
         self.rs4_state = None
+        self.home_reference_state = "UNVERIFIED"
         self.fault = None
         self.attempted_generation = None
         self.process_mode = None
@@ -109,6 +110,7 @@ class PiBridge:
         payload = json.dumps({"trackerState": self.tracker_state,
                               "currentAircraft": self.current_aircraft,
                               "rs4State": self.rs4_state,
+                              "homeReferenceState": self.home_reference_state,
                               "fault": self.fault,
                               "telemetry": self.telemetry,
                               "release": reported_release,
@@ -128,13 +130,13 @@ class PiBridge:
         os.replace(temporary, self.health_path)
         return result
 
-    def start(self, generation, direct=False):
+    def start(self, generation, direct=False, establish_home=False):
         mode = "DIRECT" if direct else "PRODUCTION"
         if self.process is not None and self.process.poll() is None and self.process_mode == mode:
             return
         if self.process is not None and self.process.poll() is None:
             self.stop()
-        attempt = (mode, generation)
+        attempt = (mode, generation, bool(establish_home))
         if self.attempted_generation == attempt:
             return
         self.attempted_generation = attempt
@@ -148,6 +150,8 @@ class PiBridge:
                    "--track", "--log", str(self.diagnostics_path)]
         if direct:
             command.append("--direct")
+        if establish_home:
+            command.append("--establish-home")
         environment = os.environ.copy()
         environment["MIKEAIRCRAFT_CONTROL_PIN"] = self.control_pin
         try:
@@ -161,6 +165,7 @@ class PiBridge:
             self.tracker_state = "STARTING"
             self.current_aircraft = None
             self.rs4_state = None
+            self.home_reference_state = "UNVERIFIED"
             self.fault = None
             self.diagnostics_offset = 0
             self.process_mode = mode
@@ -199,6 +204,7 @@ class PiBridge:
         self.tracker_state = "STOPPED"
         self.current_aircraft = None
         self.rs4_state = None
+        self.home_reference_state = "UNVERIFIED"
         self.fault = None
         self.process_mode = None
         self.telemetry = None
@@ -213,6 +219,7 @@ class PiBridge:
             return
         self.process = None
         self._close_output()
+        self.home_reference_state = "UNVERIFIED"
         self.tracker_state = "FAULT"
         detail = self._output_tail()
         self.fault = "Production tracker exited with code " + str(code)
@@ -224,7 +231,18 @@ class PiBridge:
         control = desired.get("control") or {}
         if control:
             if (control.get("owner") == "DIRECT_TRACKER" and
+                    control.get("command") == "ESTABLISH_HOME"):
+                self.start(int(control.get("generation") or 0), direct=True,
+                           establish_home=True)
+            elif (control.get("owner") == "DIRECT_TRACKER" and
                     control.get("command") == "TRACKING" and control.get("aircraftId")):
+                if (self.process is not None and self.process.poll() is None
+                        and self.process_mode == "DIRECT"):
+                    return
+                if self.home_reference_state not in {"HOME", "VERIFIED", "RETURNING"}:
+                    self.tracker_state = "STOPPED"
+                    self.current_aircraft = None
+                    return
                 self.start(int(control.get("generation") or 0), direct=True)
             elif (control.get("owner") == "DIRECT_TRACKER" and
                     control.get("command") == "STOPPED"):
@@ -257,6 +275,8 @@ class PiBridge:
                     row = json.loads(line)
                 except (ValueError, TypeError):
                     continue
+                if row.get("home_reference_state") in {"UNVERIFIED", "HOME", "VERIFIED", "RETURNING"}:
+                    self.home_reference_state = row["home_reference_state"]
                 if "aircraft_id" in row:
                     self.current_aircraft = str(row["aircraft_id"]) if row["aircraft_id"] else None
                     self.tracker_state = "TRACKING"
@@ -264,7 +284,7 @@ class PiBridge:
                         "source_age_ms", "prediction_age_ms", "aircraft_state_timestamp_ms",
                         "aim_timestamp_ms", "target_true_azimuth_deg", "target_elevation_deg",
                         "target_yaw_relative_deg", "target_pitch_relative_deg",
-                        "horizontal_range_m", "status")}
+                        "horizontal_range_m", "status", "home_reference_state")}
                 if row.get("bluetooth_state"):
                     self.rs4_state = str(row["bluetooth_state"])
             self.diagnostics_offset = handle.tell()

@@ -10,6 +10,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, apply_framing_trim, build_joystick_frame, client_connected,
                                 configured_effective_latency_s, effective_write_hz, make_disconnect_callback,
+                                settled_home_pose,
                                 observation_from_adsb, prepare_rs4_gatt,
                                 rs4_protocol_response)  # noqa: E402
 from production_tracking import CameraReference, ControllerV1, GeometryTarget, GeometryTargetSource  # noqa: E402
@@ -277,6 +278,49 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(up_output.pitch_error_deg, baseline.pitch_error_deg)
         self.assertNotEqual(up_output.tilt_command, baseline.tilt_command)
         self.assertNotEqual(up_frame, baseline_frame)
+
+    def test_home_capture_requires_fresh_settled_multisample_pose(self):
+        stable = [(10.00, 33.0, 177.0), (10.12, 33.1, 177.1),
+                  (10.25, 33.0, 177.0)]
+        self.assertEqual(settled_home_pose(stable, 10.30), (33.0, 177.0))
+        self.assertIsNone(settled_home_pose(stable, 12.50))
+
+        moving = [(20.00, 10.0, 170.0), (20.12, 10.4, 170.0),
+                  (20.25, 10.8, 170.0)]
+        self.assertIsNone(settled_home_pose(moving, 20.30))
+
+        too_short = [(30.00, 5.0, 175.0), (30.05, 5.0, 175.0),
+                     (30.10, 5.0, 175.0)]
+        self.assertIsNone(settled_home_pose(too_short, 30.12))
+
+    def test_startup_pose_is_not_silently_rebased_as_home(self):
+        source = (SCRIPTS / "production_tracker.py").read_text()
+        self.assertIn('home_yaw = home_pitch = None', source)
+        self.assertNotIn('home_yaw, home_pitch = measured_yaw, measured_pitch', source)
+        self.assertIn('HOME_REFERENCE_UNVERIFIED: establish HOME before tracking', source)
+        self.assertIn('--establish-home', source)
+
+    def test_home_capture_has_one_immutable_assignment_site(self):
+        source = (SCRIPTS / "production_tracker.py").read_text()
+        self.assertEqual(source.count("home_yaw, home_pitch = pose"), 1)
+        self.assertIn("HOME reference is immutable for this tracker session", source)
+
+    def test_verified_stop_home_target_remains_exact_relative_zero(self):
+        source = GeometryTargetSource(
+            CameraReference(50.0, 14.0, 300.0, 331.9, 2.1, 1))
+        home = source.latest(1000)
+        self.assertEqual(home.status, "HOME")
+        self.assertEqual(home.target_yaw_relative_deg, 0.0)
+        self.assertEqual(home.target_pitch_relative_deg, 0.0)
+
+        controller = ControllerV1()
+        controller.estimated_yaw_deg = 4.0
+        controller.estimated_pitch_deg = 1.5
+        output = controller.step(home, 0.05)
+        self.assertAlmostEqual(output.yaw_error_deg, -4.0)
+        self.assertAlmostEqual(output.pitch_error_deg, -1.5)
+        self.assertNotEqual(output.pan_command, 0)
+        self.assertNotEqual(output.tilt_command, 0)
 
     async def test_proven_gatt_lifecycle_waits_notifies_then_resolves_ready_tx(self):
         events = []

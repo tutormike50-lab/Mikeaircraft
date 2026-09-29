@@ -122,6 +122,7 @@ class PiBridgeTests(unittest.TestCase):
     def test_direct_stop_keeps_live_direct_tracker_running_for_home_return(self):
         calls = []
         bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.home_reference_state = "HOME"
         bridge.reconcile({"desired": "STOPPED", "generation": 8,
                           "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
                                       "generation": 2, "aircraftId": "abc123"}})
@@ -135,19 +136,32 @@ class PiBridgeTests(unittest.TestCase):
         self.assertIs(bridge.process, process)
         self.assertEqual(bridge.process_mode, "DIRECT")
 
-    def test_click_control_starts_direct_tracker_without_normal_start(self):
+    def test_unverified_direct_tracking_is_blocked_without_launch(self):
         calls = []
         bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
         bridge.reconcile({"desired": "STOPPED", "generation": 0,
                           "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
                                       "generation": 11, "aircraftId": "abc123"}})
+        self.assertEqual(calls, [])
+        self.assertEqual(bridge.tracker_state, "STOPPED")
+        self.assertEqual(bridge.home_reference_state, "UNVERIFIED")
+
+    def test_establish_home_launches_direct_tracker_in_home_capture_mode(self):
+        calls = []
+        bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.reconcile({"desired": "STOPPED", "generation": 0,
+                          "control": {"owner": "DIRECT_TRACKER", "command": "ESTABLISH_HOME",
+                                      "generation": 10, "aircraftId": None}})
         self.assertEqual(bridge.tracker_state, "STARTING")
         self.assertIn("--direct", calls[0])
+        self.assertIn("--establish-home", calls[0])
+        self.assertEqual(bridge.home_reference_state, "UNVERIFIED")
         bridge._close_output()
 
     def test_clicking_b_transfers_direct_target_without_normal_tracker_takeover(self):
         calls = []
         bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.home_reference_state = "HOME"
         bridge.reconcile({"desired": "TRACKING", "generation": 99,
                           "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
                                       "generation": 12, "aircraftId": "abc123"}})
@@ -158,6 +172,33 @@ class PiBridgeTests(unittest.TestCase):
         self.assertIn("--direct", calls[0])
         self.assertEqual(bridge.process_mode, "DIRECT")
         bridge._close_output()
+
+
+    def test_diagnostics_home_state_authorises_same_live_direct_session(self):
+        calls = []
+        process = FakeProcess()
+        bridge, path = self.make_bridge(lambda command, **kwargs: calls.append(command) or process)
+        bridge.start(1, direct=True, establish_home=True)
+        bridge.diagnostics_path.write_text(
+            '{"aircraft_id":null,"home_reference_state":"HOME","status":"HOME"}\n',
+            encoding="utf-8")
+        bridge._read_diagnostics()
+        self.assertEqual(bridge.home_reference_state, "HOME")
+        bridge.reconcile({"control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                                      "generation": 2, "aircraftId": "abc123"}})
+        self.assertEqual(len(calls), 1)
+        self.assertIs(bridge.process, process)
+        bridge._close_output()
+
+    def test_tracker_exit_invalidates_home_for_next_session(self):
+        process = FakeProcess()
+        bridge, _ = self.make_bridge(lambda *args, **kwargs: process)
+        bridge.start(1, direct=True, establish_home=True)
+        bridge.home_reference_state = "HOME"
+        process.code = 1
+        bridge.refresh_process()
+        self.assertEqual(bridge.home_reference_state, "UNVERIFIED")
+        self.assertEqual(bridge.tracker_state, "FAULT")
 
 
 if __name__ == "__main__":

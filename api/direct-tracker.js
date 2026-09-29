@@ -26,7 +26,7 @@ module.exports = async function handler(req, res) {
     if (req.method === "POST") {
       let body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
       const command = String(body?.command || "").toUpperCase();
-      if (!new Set(["TRACKING", "STOPPED"]).has(command)) return res.status(400).json({ ok: false, error: "command must be TRACKING or STOPPED" });
+      if (!new Set(["TRACKING", "STOPPED", "ESTABLISH_HOME"]).has(command)) return res.status(400).json({ ok: false, error: "command must be TRACKING, STOPPED or ESTABLISH_HOME" });
       const aircraftId = command === "TRACKING" ? cleanAircraftId(body.aircraftId) : null;
       if (command === "TRACKING" && !aircraftId) return res.status(400).json({ ok: false, error: "TRACKING requires a six-character ICAO hex" });
       const callsign = command === "TRACKING" ? String(body.callsign || aircraftId).trim().slice(0, 24) : "";

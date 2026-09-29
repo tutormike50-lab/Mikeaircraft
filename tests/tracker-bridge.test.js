@@ -32,6 +32,14 @@ test('heartbeat freshness makes stale Pi offline without inventing live status',
   assert.equal(stale.currentAircraft, null);
 });
 
+test('HOME reference state is explicit and defaults to UNVERIFIED', () => {
+  const desired = JSON.stringify({ desired: 'STOPPED', generation: 1 });
+  const fresh = JSON.stringify({ receivedAt: 1000, trackerState: 'STOPPED', homeReferenceState: 'HOME' });
+  assert.equal(publicState(desired, fresh, 2000).homeReferenceState, 'HOME');
+  const unknown = JSON.stringify({ receivedAt: 1000, trackerState: 'STOPPED', homeReferenceState: 'nonsense' });
+  assert.equal(publicState(desired, unknown, 2000).homeReferenceState, 'UNVERIFIED');
+});
+
 test('operator desired-state API requires the existing browser authentication', async () => {
   const old = saveEnv(); process.env.MIKEAIRCRAFT_CONTROL_PIN = 'test-pin';
   try {
