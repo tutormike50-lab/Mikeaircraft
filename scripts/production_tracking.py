@@ -379,12 +379,14 @@ class ControllerV1:
         self.estimated_pitch_deg = 0.0
         self.last_yaw_rate = 0.0
         self.inside_cycles = 0
+        self.home_pitch_held = False
 
     def reset_target(self, aircraft_id):
         self.aircraft_id = aircraft_id
         self.mode = "ACQUIRE"
         self.last_yaw_rate = 0.0
         self.inside_cycles = 0
+        self.home_pitch_held = False
 
     def correct_telemetry(self, measured_yaw_relative_deg, measured_pitch_relative_deg,
                           blend=0.35):
@@ -403,8 +405,13 @@ class ControllerV1:
             yaw_rate = self._slew_yaw_rate(desired_rate, dt_s)
             pan = int(clamp(round(yaw_rate / self.YAW_DEG_S_PER_COMMAND),
                             -self.max_yaw_command, self.max_yaw_command))
-            tilt = self.pitch_actuator.command(pitch_error)
-            self.mode = "HOLD_HOME" if abs(yaw_error) <= 0.35 and abs(pitch_error) <= 0.35 else "RETURN_HOME"
+            if self.home_pitch_held:
+                if abs(pitch_error) > 0.75:
+                    self.home_pitch_held = False
+            elif abs(pitch_error) <= 0.35:
+                self.home_pitch_held = True
+            tilt = 0 if self.home_pitch_held else self.pitch_actuator.command(pitch_error)
+            self.mode = "HOLD_HOME" if abs(yaw_error) <= 0.35 and self.home_pitch_held else "RETURN_HOME"
             if self.mode == "HOLD_HOME":
                 yaw_rate = 0.0
                 pan = 0

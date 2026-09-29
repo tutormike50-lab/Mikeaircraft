@@ -115,6 +115,67 @@ class ProductionTrackingTests(unittest.TestCase):
         self.source.update(self.observation)
         self.assertEqual(controller.step(self.source.latest(self.t0), 0.05).state, "ACQUIRE")
 
+    def test_home_pitch_enters_at_existing_threshold_and_holds_through_chatter(self):
+        controller = ControllerV1()
+        home = self.source.latest(self.t0)
+        controller.estimated_pitch_deg = -0.35
+        entered = controller.step(home, 0.05)
+        self.assertEqual(entered.state, "HOLD_HOME")
+        self.assertEqual(entered.tilt_command, 0)
+        for pitch_error in (0.36, -0.50, 0.70, -0.70, 0.75, -0.75):
+            controller.estimated_yaw_deg = 0.0
+            controller.estimated_pitch_deg = -pitch_error
+            output = controller.step(home, 0.05)
+            self.assertEqual(output.state, "HOLD_HOME", pitch_error)
+            self.assertEqual(output.tilt_command, 0, pitch_error)
+
+    def test_home_pitch_does_not_enter_hold_outside_existing_threshold(self):
+        controller = ControllerV1()
+        home = self.source.latest(self.t0)
+        controller.estimated_pitch_deg = -0.36
+        output = controller.step(home, 0.05)
+        self.assertEqual(output.state, "RETURN_HOME")
+        self.assertNotEqual(output.tilt_command, 0)
+        self.assertFalse(controller.home_pitch_held)
+
+    def test_home_pitch_reopens_only_beyond_point_seven_five_degrees(self):
+        controller = ControllerV1()
+        home = self.source.latest(self.t0)
+        controller.estimated_pitch_deg = 0.0
+        self.assertEqual(controller.step(home, 0.05).state, "HOLD_HOME")
+        controller.estimated_pitch_deg = -0.750001
+        reopened = controller.step(home, 0.05)
+        self.assertEqual(reopened.state, "RETURN_HOME")
+        self.assertNotEqual(reopened.tilt_command, 0)
+        self.assertFalse(controller.home_pitch_held)
+        controller.estimated_pitch_deg = -0.35
+        reentered = controller.step(home, 0.05)
+        self.assertEqual(reentered.state, "HOLD_HOME")
+        self.assertEqual(reentered.tilt_command, 0)
+        self.assertTrue(controller.home_pitch_held)
+
+    def test_pan_home_rule_is_independent_of_pitch_hold_hysteresis(self):
+        controller = ControllerV1()
+        home = self.source.latest(self.t0)
+        controller.estimated_yaw_deg = 0.0
+        controller.estimated_pitch_deg = 0.0
+        self.assertEqual(controller.step(home, 0.05).state, "HOLD_HOME")
+        controller.estimated_yaw_deg = 0.36
+        controller.estimated_pitch_deg = -0.70
+        output = controller.step(home, 0.05)
+        self.assertEqual(output.state, "RETURN_HOME")
+        self.assertNotEqual(output.pan_command, 0)
+        self.assertEqual(output.tilt_command, 0)
+
+    def test_aircraft_target_resets_home_pitch_hold(self):
+        controller = ControllerV1()
+        home = self.source.latest(self.t0)
+        self.assertEqual(controller.step(home, 0.05).state, "HOLD_HOME")
+        self.assertTrue(controller.home_pitch_held)
+        self.source.update(self.observation)
+        output = controller.step(self.source.latest(self.t0), 0.05)
+        self.assertEqual(output.state, "ACQUIRE")
+        self.assertFalse(controller.home_pitch_held)
     def test_latency_is_applied_once_from_observation_timestamp(self):
         self.source.update(self.observation)
         target = self.source.latest(self.t0 + 400)
