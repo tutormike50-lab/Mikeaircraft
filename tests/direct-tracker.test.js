@@ -37,13 +37,39 @@ test('ESTABLISH HOME is an explicit direct command and clears any lock', async (
 });
 
 test('STOP clears the direct lock and sends an explicit STOPPED command', async () => {
-  const commands = [], lock = radar.createDirectLock(async command => commands.push(command));
+  const commands = [], lock = radar.createDirectLock(async command => {
+    commands.push(command);
+    return command.command === 'STOPPED' ? { command: 'STOPPED', generation: 12 } : {};
+  });
   await lock.select({ hex: 'abc123', callsign: 'ONE1' });
-  await lock.stop();
+  const acknowledged = await lock.stop();
   assert.equal(lock.lockedIcao, null);
   assert.equal(commands.at(-1).command, 'STOPPED');
+  assert.equal(acknowledged.command, 'STOPPED');
+  assert.equal(acknowledged.generation, 12);
 });
 
+test('STOP without acknowledged STOPPED generation fails and keeps the local lock', async () => {
+  const lock = radar.createDirectLock(async command => command.command === 'STOPPED' ? { command: 'TRACKING', generation: 13 } : {});
+  await lock.select({ hex: 'abc123', callsign: 'ONE1' });
+  await assert.rejects(lock.stop(), /STOP was not acknowledged/);
+  assert.equal(lock.lockedIcao, 'abc123');
+});
+
+test('STOP acknowledgement generation must advance from the last rendered server generation', async () => {
+  const lock = radar.createDirectLock(async command => command.command === 'STOPPED' ? { command: 'STOPPED', generation: 20 } : {});
+  lock.applyServerState({ command: 'TRACKING', aircraftId: 'abc123', generation: 20 });
+  await assert.rejects(lock.stop(), /STOP was not acknowledged/);
+  assert.equal(lock.lockedIcao, 'abc123');
+});
+test('browser STOP has bounded timeout and explicit pending success failure UI states', () => {
+  const client = fs.readFileSync(require.resolve('../public/direct-tracker.js'), 'utf8');
+  assert.ok(client.includes('AbortController'));
+  assert.ok(client.includes('timeoutMs:4000'));
+  assert.ok(client.includes('STOP PENDING'));
+  assert.ok(client.includes('STOP ACKNOWLEDGED'));
+  assert.ok(client.includes('STOP FAILED'));
+});
 test('direct control validates ICAO and never accepts implicit target selection', () => {
   assert.equal(direct.cleanAircraftId(' AbC123 '), 'abc123');
   assert.equal(direct.cleanAircraftId('CURRENT'), null);
@@ -57,6 +83,7 @@ test('standalone page is click-to-lock with an explicit STOP/HOME control', asyn
   for (const id of ['track','home']) assert.ok(!html.includes('id="'+id+'"'));
   assert.match(html, /GIMBAL OWNER: DIRECT TRACKER/);
   assert.ok(html.includes('/direct-tracker.js'));
+  assert.ok(html.includes('RAW POSITION AGE (ms)'));
   const client = fs.readFileSync(require.resolve('../public/direct-tracker.js'), 'utf8');
   assert.ok(client.includes('/api/direct-tracker'));
   assert.ok(client.includes("homeReferenceState==='UNVERIFIED'"));

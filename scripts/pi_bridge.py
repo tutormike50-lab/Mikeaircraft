@@ -17,6 +17,7 @@ from release_manager import ReleaseManager
 
 POLL_SECONDS = 2.0
 STOP_TIMEOUT_SECONDS = 12.0
+DIRECT_STOP_HOME_GRACE_SECONDS = 12.0
 
 
 def token_fingerprint(token):
@@ -209,6 +210,21 @@ class PiBridge:
         self.process_mode = None
         self.telemetry = None
 
+    def stop_direct_authoritatively(self):
+        """Allow normal HOME return briefly, then guarantee the DIRECT process stops."""
+        process = self.process
+        if process is None or process.poll() is not None or self.process_mode != "DIRECT":
+            self.stop()
+            return
+        reference_valid = self.home_reference_state in {"HOME", "VERIFIED", "RETURNING"}
+        if reference_valid:
+            deadline = self.now() + DIRECT_STOP_HOME_GRACE_SECONDS
+            while self.now() < deadline and process.poll() is None:
+                self._read_diagnostics()
+                if self.current_aircraft is None and self.home_reference_state == "HOME":
+                    break
+                self.sleep(0.1)
+        self.stop()
     def refresh_process(self):
         process = self.process
         if process is None:
@@ -246,9 +262,7 @@ class PiBridge:
                 self.start(int(control.get("generation") or 0), direct=True)
             elif (control.get("owner") == "DIRECT_TRACKER" and
                     control.get("command") == "STOPPED"):
-                if not (self.process is not None and self.process.poll() is None
-                        and self.process_mode == "DIRECT"):
-                    self.stop()
+                self.stop_direct_authoritatively()
             elif control.get("owner") == "PRODUCTION" and control.get("command") == "TRACKING":
                 self.start(int(control.get("generation") or 0), direct=False)
             else:

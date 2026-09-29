@@ -119,7 +119,7 @@ class PiBridgeTests(unittest.TestCase):
         self.assertIn("[REDACTED]", bridge.fault)
         report.assert_called_once_with(bridge.fault, flush=True)
 
-    def test_direct_stop_keeps_live_direct_tracker_running_for_home_return(self):
+    def test_direct_stop_authoritatively_stops_live_direct_tracker_and_clears_aircraft(self):
         calls = []
         bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
         bridge.home_reference_state = "HOME"
@@ -127,14 +127,52 @@ class PiBridgeTests(unittest.TestCase):
                           "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
                                       "generation": 2, "aircraftId": "abc123"}})
         self.assertIn("--direct", calls[0])
-        process = bridge.process
+        bridge.current_aircraft = None
+        bridge.home_reference_state = "HOME"
         with mock.patch.object(pi_bridge.os, "killpg", create=True) as killpg:
             bridge.reconcile({"desired": "STOPPED", "generation": 8,
                               "control": {"owner": "DIRECT_TRACKER", "command": "STOPPED",
                                           "generation": 3, "aircraftId": None}})
-        killpg.assert_not_called()
-        self.assertIs(bridge.process, process)
-        self.assertEqual(bridge.process_mode, "DIRECT")
+        killpg.assert_called_once_with(4321, pi_bridge.signal.SIGINT)
+        self.assertIsNone(bridge.process)
+        self.assertIsNone(bridge.current_aircraft)
+        self.assertEqual(bridge.tracker_state, "STOPPED")
+
+    def test_direct_stop_allows_existing_home_return_before_authoritative_process_stop(self):
+        calls = []
+        bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.home_reference_state = "HOME"
+        bridge.reconcile({"control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                                      "generation": 2, "aircraftId": "abc123"}})
+        bridge.current_aircraft = "abc123"
+        bridge.home_reference_state = "VERIFIED"
+
+        def reached_home():
+            bridge.current_aircraft = None
+            bridge.home_reference_state = "HOME"
+
+        with mock.patch.object(bridge, "_read_diagnostics", side_effect=reached_home) as read_diag:
+            with mock.patch.object(pi_bridge.os, "killpg", create=True) as killpg:
+                bridge.reconcile({"control": {"owner": "DIRECT_TRACKER", "command": "STOPPED",
+                                              "generation": 3, "aircraftId": None}})
+        read_diag.assert_called()
+        killpg.assert_called_once_with(4321, pi_bridge.signal.SIGINT)
+        self.assertIsNone(bridge.current_aircraft)
+        self.assertEqual(bridge.tracker_state, "STOPPED")
+    def test_direct_stop_with_unverified_reference_stops_immediately_without_home_wait(self):
+        calls = []
+        bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.home_reference_state = "HOME"
+        bridge.reconcile({"control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                                      "generation": 2, "aircraftId": "abc123"}})
+        bridge.home_reference_state = "UNVERIFIED"
+        bridge.current_aircraft = "abc123"
+        with mock.patch.object(pi_bridge.os, "killpg", create=True) as killpg:
+            bridge.reconcile({"control": {"owner": "DIRECT_TRACKER", "command": "STOPPED",
+                                          "generation": 3, "aircraftId": None}})
+        killpg.assert_called_once_with(4321, pi_bridge.signal.SIGINT)
+        self.assertIsNone(bridge.current_aircraft)
+        self.assertEqual(bridge.tracker_state, "STOPPED")
 
     def test_unverified_direct_tracking_is_blocked_without_launch(self):
         calls = []
