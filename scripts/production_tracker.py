@@ -546,8 +546,16 @@ class AltitudePitchAcquisition:
         return PitchAcquireDecision(0, state, reason, 0.0, physical, error, event)
 
 
-def apply_pitch_acquisition(controller_output, decision):
-    """Override only tilt; the b72738c pan output remains byte-for-byte numeric."""
+def apply_pitch_acquisition(controller_output, decision, operator_tilt_trim_deg=0.0):
+    """Arbitrate tilt only; explicit post-acquisition framing may use ControllerV1."""
+    operator_trim_active = (
+        isinstance(operator_tilt_trim_deg, (int, float))
+        and not isinstance(operator_tilt_trim_deg, bool)
+        and math.isfinite(operator_tilt_trim_deg)
+        and operator_tilt_trim_deg != 0.0
+    )
+    if decision.state == "ACQUIRED" and operator_trim_active:
+        return controller_output
     return replace(controller_output, tilt_command=decision.command)
 
 
@@ -1035,7 +1043,7 @@ async def run(args):
                              bluetooth_state=bluetooth_state)
                 diagnostics.event(event.pop("name"), **event)
             if not (args.direct and selected_id is None):
-                output = apply_pitch_acquisition(output, pitch)
+                output = apply_pitch_acquisition(output, pitch, panel_tilt_trim)
             await send_axes(output.tilt_command * RS4_PITCH_SIGN,
                             output.pan_command * RS4_YAW_SIGN)
             diagnostics.write(target, output, {
