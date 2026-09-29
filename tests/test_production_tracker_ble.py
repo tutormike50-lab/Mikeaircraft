@@ -8,7 +8,9 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, apply_framing_trim, build_joystick_frame, client_connected,
+from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder,
+                                AIRCRAFT_ELEVATION_AIM_OFFSET_DEG, apply_aircraft_elevation_aim_offset,
+                                apply_framing_trim, build_joystick_frame, client_connected,
                                 configured_effective_latency_s, effective_write_hz, make_disconnect_callback,
                                 settled_home_pose,
                                 observation_from_adsb, prepare_rs4_gatt,
@@ -205,6 +207,58 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
         callback(active)
         self.assertEqual(len(recorded), 1)
 
+    def test_aircraft_elevation_aim_offset_zero_is_exact_baseline_and_plus_one_is_physical_up(self):
+        base = GeometryTarget(
+            1000, "abc123", 100.0, 5.0, 0.0, 0.0, 0.0, 0.0,
+            900, 1100, 100, 200, 5000.0, 5100.0, "ADS_B", "ADS_B_GEOMETRIC",
+            "ADS_B_GROUND_VECTOR", True, True, "VALID")
+        zero = apply_aircraft_elevation_aim_offset(base, 0.0)
+        self.assertIs(zero, base)
+
+        shifted = apply_aircraft_elevation_aim_offset(base)
+        self.assertEqual(AIRCRAFT_ELEVATION_AIM_OFFSET_DEG, 1.0)
+        self.assertAlmostEqual(shifted.target_pitch_relative_deg, 1.0)
+        self.assertEqual(shifted.target_true_azimuth_deg, base.target_true_azimuth_deg)
+        self.assertEqual(shifted.target_elevation_deg, base.target_elevation_deg)
+        self.assertEqual(shifted.target_yaw_relative_deg, base.target_yaw_relative_deg)
+        self.assertEqual(shifted.target_yaw_rate_deg_s, base.target_yaw_rate_deg_s)
+        self.assertEqual(shifted.target_pitch_rate_deg_s, base.target_pitch_rate_deg_s)
+
+        baseline_controller = ControllerV1()
+        baseline_controller.aircraft_id = "abc123"
+        baseline_controller.mode = "TRACK"
+        baseline = baseline_controller.step(base, 0.05)
+
+        shifted_controller = ControllerV1()
+        shifted_controller.aircraft_id = "abc123"
+        shifted_controller.mode = "TRACK"
+        corrected = shifted_controller.step(shifted, 0.05)
+
+        self.assertAlmostEqual(corrected.pitch_error_deg - baseline.pitch_error_deg, 1.0)
+        self.assertGreater(corrected.tilt_command, baseline.tilt_command)
+        self.assertEqual(corrected.pan_command, baseline.pan_command)
+
+        packet = lambda seq, tilt, pan: (seq, tilt, pan)
+        baseline_frame = build_joystick_frame(
+            packet, 77, baseline.tilt_command, baseline.pan_command)
+        corrected_frame = build_joystick_frame(
+            packet, 77, corrected.tilt_command, corrected.pan_command)
+        self.assertEqual(corrected_frame[2], baseline_frame[2])
+
+    def test_aircraft_elevation_aim_offset_home_and_stop_home_are_exact_no_ops(self):
+        home = GeometryTarget(
+            1001, None, 90.0, 2.0, 0.0, 0.0, 0.0, 0.0,
+            None, 1101, None, None, None, None, "CAMERA_REFERENCE",
+            "CAMERA_REFERENCE", None, True, True, "HOME")
+        shifted_home = apply_aircraft_elevation_aim_offset(home)
+        self.assertIs(shifted_home, home)
+        self.assertEqual(shifted_home.target_yaw_relative_deg, 0.0)
+        self.assertEqual(shifted_home.target_pitch_relative_deg, 0.0)
+
+        controller = ControllerV1()
+        output = controller.step(shifted_home, 0.05)
+        self.assertEqual(output.pan_command, 0)
+        self.assertEqual(output.tilt_command, 0)
     def test_framing_trim_is_signed_bounded_position_only_and_home_safe(self):
         target = GeometryTarget(
             1000, "abc123", 100.0, 5.0, 12.0, 3.0, 1.25, -0.4,

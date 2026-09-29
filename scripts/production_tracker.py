@@ -48,6 +48,7 @@ HOME_CAPTURE_TIMEOUT_S = 6.0
 HOME_SAMPLE_WINDOW_S = 3.0
 HOME_SAMPLE_MIN_SPAN_S = 0.2
 HOME_SETTLED_TOLERANCE_DEG = 0.25
+AIRCRAFT_ELEVATION_AIM_OFFSET_DEG = 1.0
 
 RS4_PROTOCOL_REQUESTS = {
     (0x04, 0x02, 0x00, 0x04, 0x38),
@@ -551,6 +552,16 @@ def apply_pitch_acquisition(controller_output, decision):
     return replace(controller_output, tilt_command=decision.command)
 
 
+def apply_aircraft_elevation_aim_offset(target, offset_deg=AIRCRAFT_ELEVATION_AIM_OFFSET_DEG):
+    """Apply a physical-UP aircraft-only aim correction after geometry."""
+    if (not target.aircraft_id or target.status == "HOME" or
+            not target.vertical_valid or target.target_pitch_relative_deg is None or
+            offset_deg == 0.0):
+        return target
+    return replace(
+        target,
+        target_pitch_relative_deg=target.target_pitch_relative_deg + offset_deg)
+
 def apply_framing_trim(target, pan_deg=0.0, tilt_deg=0.0):
     """Shift only the aircraft aim point; rates, geometry provenance and HOME stay intact."""
     if target.status == "HOME" or not target.aircraft_id or (pan_deg == 0 and tilt_deg == 0):
@@ -982,6 +993,7 @@ async def run(args):
             if responder.done():
                 responder.result()
             target = source.latest(now_ms)
+            target = apply_aircraft_elevation_aim_offset(target)
             if home_yaw is None or home_pitch is None:
                 await stop_motion()
                 raise RuntimeError("HOME_REFERENCE_UNVERIFIED: tracking blocked")
