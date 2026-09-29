@@ -8,7 +8,7 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, apply_framing_trim, build_joystick_frame, client_connected,
+from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, PitchAcquireDecision, apply_framing_trim, apply_pitch_acquisition, build_joystick_frame, client_connected,
                                 configured_effective_latency_s, effective_write_hz, make_disconnect_callback,
                                 observation_from_adsb, prepare_rs4_gatt,
                                 rs4_protocol_response)  # noqa: E402
@@ -277,6 +277,63 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(up_output.pitch_error_deg, baseline.pitch_error_deg)
         self.assertNotEqual(up_output.tilt_command, baseline.tilt_command)
         self.assertNotEqual(up_frame, baseline_frame)
+
+    def test_post_acquired_operator_tilt_bypasses_only_zero_acquisition_command(self):
+        base = GeometryTarget(
+            1000, "abc123", 100.0, 5.0, 0.0, 0.0, 0.0, 0.0,
+            900, 1100, 100, 200, 5000.0, 5100.0, "ADS_B", "ADS_B_GEOMETRIC",
+            "ADS_B_GROUND_VECTOR", True, True, "VALID")
+        corrected = apply_framing_trim(base, 0.0, 0.50)
+        controller = ControllerV1()
+        controller.aircraft_id = "abc123"
+        controller.mode = "TRACK"
+        controller_output = controller.step(corrected, 0.05)
+        self.assertNotEqual(controller_output.tilt_command, 0)
+
+        acquired = PitchAcquireDecision(
+            0, "ACQUIRED", "ON_TARGET", 0.0, 0.0,
+            corrected.target_pitch_relative_deg)
+        automatic = apply_pitch_acquisition(controller_output, acquired, 0.0)
+        framed = apply_pitch_acquisition(controller_output, acquired, 0.50)
+        self.assertEqual(automatic.tilt_command, 0)
+        self.assertEqual(framed.tilt_command, controller_output.tilt_command)
+        self.assertEqual(framed.pan_command, automatic.pan_command)
+        self.assertEqual(framed.pan_command, controller_output.pan_command)
+
+        packet = lambda seq, tilt, pan: (seq, tilt, pan)
+        automatic_packet = build_joystick_frame(
+            packet, 77, automatic.tilt_command, automatic.pan_command)
+        framed_packet = build_joystick_frame(
+            packet, 77, framed.tilt_command, framed.pan_command)
+        self.assertNotEqual(framed_packet, automatic_packet)
+        self.assertEqual(framed_packet[2], automatic_packet[2])
+
+    def test_operator_tilt_does_not_bypass_active_acquisition_or_home(self):
+        base = GeometryTarget(
+            1000, "abc123", 100.0, 5.0, 0.0, 0.0, 0.0, 0.0,
+            900, 1100, 100, 200, 5000.0, 5100.0, "ADS_B", "ADS_B_GEOMETRIC",
+            "ADS_B_GROUND_VECTOR", True, True, "VALID")
+        corrected = apply_framing_trim(base, 0.0, 0.50)
+        controller = ControllerV1()
+        controller.aircraft_id = "abc123"
+        controller.mode = "TRACK"
+        output = controller.step(corrected, 0.05)
+        acquiring = PitchAcquireDecision(35, "ACQUIRE", None, 0.2, 0.0, -2.0)
+        final = apply_pitch_acquisition(output, acquiring, 0.50)
+        self.assertEqual(final.tilt_command, 35)
+        self.assertEqual(final.pan_command, output.pan_command)
+
+        home = GeometryTarget(
+            1001, None, 90.0, 2.0, 0.0, 0.0, 0.0, 0.0,
+            None, 1101, None, None, None, None, "CAMERA_REFERENCE",
+            "CAMERA_REFERENCE", None, True, True, "HOME")
+        self.assertIs(apply_framing_trim(home, 0.0, 5.0), home)
+        home_controller = ControllerV1()
+        home_output = home_controller.step(home, 0.05)
+        idle = PitchAcquireDecision(0, "IDLE", physical_pitch_deg=0.0, error_deg=0.0)
+        home_final = apply_pitch_acquisition(home_output, idle, 5.0)
+        self.assertEqual(home_final.pan_command, 0)
+        self.assertEqual(home_final.tilt_command, 0)
 
     async def test_proven_gatt_lifecycle_waits_notifies_then_resolves_ready_tx(self):
         events = []
