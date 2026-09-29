@@ -8,11 +8,11 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, client_connected,
+from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, apply_framing_trim, client_connected,
                                 configured_effective_latency_s, effective_write_hz, make_disconnect_callback,
                                 observation_from_adsb, prepare_rs4_gatt,
                                 rs4_protocol_response)  # noqa: E402
-from production_tracking import CameraReference, GeometryTargetSource  # noqa: E402
+from production_tracking import CameraReference, GeometryTarget, GeometryTargetSource  # noqa: E402
 
 
 class FakeTx:
@@ -203,6 +203,45 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
         intentional = True
         callback(active)
         self.assertEqual(len(recorded), 1)
+
+    def test_framing_trim_is_signed_bounded_position_only_and_home_safe(self):
+        target = GeometryTarget(
+            1000, "abc123", 100.0, 5.0, 12.0, 3.0, 1.25, -0.4,
+            900, 1100, 100, 200, 5000.0, 5100.0, "ADS_B", "ADS_B_GEOMETRIC",
+            "ADS_B_GROUND_VECTOR", True, True, "VALID")
+        zero = apply_framing_trim(target, 0.0, 0.0)
+        self.assertIs(zero, target)
+        right_up = apply_framing_trim(target, 0.25, 0.25)
+        self.assertAlmostEqual(right_up.target_yaw_relative_deg, 12.25)
+        self.assertAlmostEqual(right_up.target_pitch_relative_deg, 3.25)
+        left_down = apply_framing_trim(target, -0.25, -0.25)
+        self.assertAlmostEqual(left_down.target_yaw_relative_deg, 11.75)
+        self.assertAlmostEqual(left_down.target_pitch_relative_deg, 2.75)
+        self.assertEqual(right_up.target_yaw_rate_deg_s, target.target_yaw_rate_deg_s)
+        self.assertEqual(right_up.target_pitch_rate_deg_s, target.target_pitch_rate_deg_s)
+        self.assertEqual(right_up.aircraft_id, target.aircraft_id)
+        home = GeometryTarget(
+            1001, None, 90.0, 2.0, 0.0, 0.0, 0.0, 0.0,
+            None, 1101, None, None, None, None, "CAMERA_REFERENCE",
+            "CAMERA_REFERENCE", None, True, True, "HOME")
+        self.assertIs(apply_framing_trim(home, 5.0, 5.0), home)
+        self.assertEqual(home.target_yaw_relative_deg, 0.0)
+        self.assertEqual(home.target_pitch_relative_deg, 0.0)
+
+    def test_framing_trim_does_not_carry_aircraft_state(self):
+        a = GeometryTarget(
+            1000, "aaaaaa", 100.0, 5.0, 12.0, 3.0, 1.25, -0.4,
+            900, 1100, 100, 200, 5000.0, 5100.0, "ADS_B", "ADS_B_GEOMETRIC",
+            "ADS_B_GROUND_VECTOR", True, True, "VALID")
+        b = GeometryTarget(
+            1001, "bbbbbb", 102.0, 6.0, 20.0, 4.0, -0.7, 0.2,
+            901, 1101, 100, 200, 6000.0, 6100.0, "ADS_B", "ADS_B_GEOMETRIC",
+            "ADS_B_GROUND_VECTOR", True, True, "VALID")
+        self.assertEqual(apply_framing_trim(a, 0.2, -0.1).aircraft_id, "aaaaaa")
+        framed_b = apply_framing_trim(b, 0.2, -0.1)
+        self.assertEqual(framed_b.aircraft_id, "bbbbbb")
+        self.assertAlmostEqual(framed_b.target_yaw_relative_deg, 20.2)
+        self.assertAlmostEqual(framed_b.target_pitch_relative_deg, 3.9)
 
     async def test_proven_gatt_lifecycle_waits_notifies_then_resolves_ready_tx(self):
         events = []
