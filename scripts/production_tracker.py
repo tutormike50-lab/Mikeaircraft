@@ -48,6 +48,8 @@ OPERATIONAL_HOME_ELEVATION_DEG = -2.5
 AIRCRAFT_PAN_AIM_OFFSET_DEG = -5.0
 GNSS_TEST_LATITUDE_DEG = 50.0655668
 GNSS_TEST_LONGITUDE_DEG = 14.3043564
+ZOOM_PAN_OFFSET_AT_FULL_DEG = -1.0
+ZOOM_TILT_OFFSET_AT_FULL_DEG = -0.5
 
 RS4_PROTOCOL_REQUESTS = {
     (0x04, 0x02, 0x00, 0x04, 0x38),
@@ -937,7 +939,10 @@ async def run(args):
             if responder.done():
                 responder.result()
             target = source.latest(now_ms)
-            target = apply_framing_trim(target, AIRCRAFT_PAN_AIM_OFFSET_DEG, 0.0)
+            zoom_pan = ZOOM_PAN_OFFSET_AT_FULL_DEG * optics.slider_position_0_1
+            zoom_tilt = ZOOM_TILT_OFFSET_AT_FULL_DEG * optics.slider_position_0_1
+            target = apply_framing_trim(
+                target, AIRCRAFT_PAN_AIM_OFFSET_DEG + zoom_pan, zoom_tilt)
             if telemetry_at is None or tick - telemetry_at > TELEMETRY_MAX_AGE_S:
                 await stop_motion()
                 raise RuntimeError("RS4 telemetry stale; tracking stopped")

@@ -387,5 +387,16 @@ class FixedAircraftPanAimOffsetTests(unittest.TestCase):
         self.assertEqual(home_aimed.target_yaw_relative_deg, 0.0)
         self.assertEqual(home_aimed.target_pitch_relative_deg, 0.0)
 
+
+
+class ZoomFramingOffsetTests(unittest.TestCase):
+    def test_zoom_offsets_scale_from_zero_at_wide_to_trial_values_at_full(self):
+        self.assertEqual(production_tracker.ZOOM_PAN_OFFSET_AT_FULL_DEG * 0.0, 0.0)
+        self.assertEqual(production_tracker.ZOOM_TILT_OFFSET_AT_FULL_DEG * 0.0, -0.0)
+        self.assertEqual(production_tracker.ZOOM_PAN_OFFSET_AT_FULL_DEG * 0.5, -0.5)
+        self.assertEqual(production_tracker.ZOOM_TILT_OFFSET_AT_FULL_DEG * 0.5, -0.25)
+        self.assertEqual(production_tracker.ZOOM_PAN_OFFSET_AT_FULL_DEG * 1.0, -1.0)
+        self.assertEqual(production_tracker.ZOOM_TILT_OFFSET_AT_FULL_DEG * 1.0, -0.5)
+
 if __name__ == "__main__":
     unittest.main()
