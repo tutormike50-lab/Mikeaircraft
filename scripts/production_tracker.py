@@ -44,6 +44,7 @@ PITCH_MAX_CUMULATIVE_S = 2.0
 PITCH_ACQUIRE_TIMEOUT_S = 8.0
 PITCH_TELEMETRY_STALE_S = 2.5
 OPERATIONAL_HOME_TRUE_AZIMUTH_DEG = 0.0
+OPERATIONAL_HOME_ELEVATION_DEG = -4.5
 
 RS4_PROTOCOL_REQUESTS = {
     (0x04, 0x02, 0x00, 0x04, 0x38),
@@ -172,7 +173,7 @@ def load_camera_reference(url, pin):
     if not payload.get("ok"):
         raise RuntimeError(payload.get("error") or "CameraReference unavailable")
     camera = CameraReference.from_api(payload.get("cameraReference") or {})
-    return replace(camera, home_true_azimuth_deg=OPERATIONAL_HOME_TRUE_AZIMUTH_DEG)
+    return replace(camera, home_true_azimuth_deg=OPERATIONAL_HOME_TRUE_AZIMUTH_DEG, home_elevation_deg=OPERATIONAL_HOME_ELEVATION_DEG)
 
 
 def load_camera_optics(url):

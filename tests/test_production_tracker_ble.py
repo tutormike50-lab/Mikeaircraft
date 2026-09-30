@@ -325,7 +325,7 @@ class TrueNorthOperationalHomeTests(unittest.TestCase):
         with mock.patch.object(production_tracker, "read_json_url", return_value=payload):
             camera = production_tracker.load_camera_reference("https://example.test", "pin")
         self.assertEqual(camera.home_true_azimuth_deg, 0.0)
-        self.assertEqual(camera.home_elevation_deg, -5.5)
+        self.assertEqual(camera.home_elevation_deg, -4.5)
         self.assertEqual(camera.latitude_deg, 50.0654226)
         self.assertEqual(camera.longitude_deg, 14.3042639)
         self.assertEqual(camera.altitude_ellipsoid_m, 360.9)
@@ -334,6 +334,28 @@ class TrueNorthOperationalHomeTests(unittest.TestCase):
         self.assertEqual(production_tracker.wrap180(30.0 - 0.0), 30.0)
         self.assertEqual(production_tracker.wrap180(330.0 - 0.0), -30.0)
         self.assertEqual(production_tracker.wrap180(0.0 - 0.0), 0.0)
+
+
+
+    def test_operational_home_elevation_reduces_target_pitch_by_exactly_one_degree(self):
+        old_camera = CameraReference(50.0, 14.0, 300.0, 0.0, -5.5, 1)
+        new_camera = CameraReference(50.0, 14.0, 300.0, 0.0, -4.5, 1)
+        old_source = GeometryTargetSource(old_camera, effective_latency_s=0.0)
+        new_source = GeometryTargetSource(new_camera, effective_latency_s=0.0)
+        observation = production_tracker.AircraftObservation(
+            "abc123", 1000, 50.05, 14.0, 1000.0, None, None, None)
+        self.assertTrue(old_source.update(observation))
+        self.assertTrue(new_source.update(observation))
+        old_target = old_source.latest(1000)
+        new_target = new_source.latest(1000)
+        self.assertAlmostEqual(new_target.target_yaw_relative_deg, old_target.target_yaw_relative_deg)
+        self.assertAlmostEqual(new_target.target_pitch_relative_deg,
+                               old_target.target_pitch_relative_deg - 1.0)
+        old_controller = ControllerV1()
+        new_controller = ControllerV1()
+        old_out = old_controller.step(old_target, 0.05)
+        new_out = new_controller.step(new_target, 0.05)
+        self.assertEqual(new_out.pan_command, old_out.pan_command)
 
 if __name__ == "__main__":
     unittest.main()
