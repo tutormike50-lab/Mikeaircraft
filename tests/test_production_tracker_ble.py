@@ -357,5 +357,35 @@ class TrueNorthOperationalHomeTests(unittest.TestCase):
         new_out = new_controller.step(new_target, 0.05)
         self.assertEqual(new_out.pan_command, old_out.pan_command)
 
+
+
+class FixedAircraftPanAimOffsetTests(unittest.TestCase):
+    def test_aircraft_offset_is_minus_five_and_home_is_unchanged(self):
+        camera = CameraReference(50.0, 14.0, 300.0, 0.0, -2.5, 1)
+        source = GeometryTargetSource(camera, effective_latency_s=0.0)
+        observation = production_tracker.AircraftObservation(
+            "abc123", 1000, 50.05, 14.0, 1000.0, None, None, None)
+        self.assertTrue(source.update(observation))
+        raw_target = source.latest(1000)
+        aimed = production_tracker.apply_framing_trim(
+            raw_target, production_tracker.AIRCRAFT_PAN_AIM_OFFSET_DEG, 0.0)
+        self.assertAlmostEqual(production_tracker.AIRCRAFT_PAN_AIM_OFFSET_DEG, -5.0)
+        self.assertAlmostEqual(
+            production_tracker.wrap180(
+                aimed.target_yaw_relative_deg - raw_target.target_yaw_relative_deg),
+            -5.0)
+        self.assertAlmostEqual(
+            aimed.target_pitch_relative_deg, raw_target.target_pitch_relative_deg)
+
+        home = GeometryTarget(
+            1001, None, 0.0, -2.5, 0.0, 0.0, 0.0, 0.0,
+            None, 1001, None, None, None, None, "CAMERA_REFERENCE",
+            "CAMERA_REFERENCE", None, True, True, "HOME")
+        home_aimed = production_tracker.apply_framing_trim(
+            home, production_tracker.AIRCRAFT_PAN_AIM_OFFSET_DEG, 0.0)
+        self.assertIs(home_aimed, home)
+        self.assertEqual(home_aimed.target_yaw_relative_deg, 0.0)
+        self.assertEqual(home_aimed.target_pitch_relative_deg, 0.0)
+
 if __name__ == "__main__":
     unittest.main()

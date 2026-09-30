@@ -45,6 +45,7 @@ PITCH_ACQUIRE_TIMEOUT_S = 8.0
 PITCH_TELEMETRY_STALE_S = 2.5
 OPERATIONAL_HOME_TRUE_AZIMUTH_DEG = 0.0
 OPERATIONAL_HOME_ELEVATION_DEG = -2.5
+AIRCRAFT_PAN_AIM_OFFSET_DEG = -5.0
 
 RS4_PROTOCOL_REQUESTS = {
     (0x04, 0x02, 0x00, 0x04, 0x38),
@@ -934,6 +935,7 @@ async def run(args):
             if responder.done():
                 responder.result()
             target = source.latest(now_ms)
+            target = apply_framing_trim(target, AIRCRAFT_PAN_AIM_OFFSET_DEG, 0.0)
             if telemetry_at is None or tick - telemetry_at > TELEMETRY_MAX_AGE_S:
                 await stop_motion()
                 raise RuntimeError("RS4 telemetry stale; tracking stopped")
