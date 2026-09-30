@@ -43,6 +43,7 @@ PITCH_ON_TARGET_DEG = 1.0
 PITCH_MAX_CUMULATIVE_S = 2.0
 PITCH_ACQUIRE_TIMEOUT_S = 8.0
 PITCH_TELEMETRY_STALE_S = 2.5
+OPERATIONAL_HOME_TRUE_AZIMUTH_DEG = 0.0
 
 RS4_PROTOCOL_REQUESTS = {
     (0x04, 0x02, 0x00, 0x04, 0x38),
@@ -170,7 +171,8 @@ def load_camera_reference(url, pin):
                                   "X-MikeAircraft-Control-Pin": pin})
     if not payload.get("ok"):
         raise RuntimeError(payload.get("error") or "CameraReference unavailable")
-    return CameraReference.from_api(payload.get("cameraReference") or {})
+    camera = CameraReference.from_api(payload.get("cameraReference") or {})
+    return replace(camera, home_true_azimuth_deg=OPERATIONAL_HOME_TRUE_AZIMUTH_DEG)
 
 
 def load_camera_optics(url):

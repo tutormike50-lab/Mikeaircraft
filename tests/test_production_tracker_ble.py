@@ -3,11 +3,13 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest import mock
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import production_tracker  # noqa: E402
 from production_tracker import (AdsbObservationIntake, BleLifecycleError, DjiFrameDecoder, apply_framing_trim, build_joystick_frame, client_connected,
                                 configured_effective_latency_s, effective_write_hz, make_disconnect_callback,
                                 observation_from_adsb, prepare_rs4_gatt,
@@ -300,6 +302,38 @@ class ProductionTrackerBleTests(unittest.IsolatedAsyncioTestCase):
             "sleep:0.8", "notify:rx", "tx:tx", "size:1", "sleep:0.4", "size:2"
         ])
 
+
+
+
+class TrueNorthOperationalHomeTests(unittest.TestCase):
+    def test_loaded_camera_reference_forces_operational_home_true_north(self):
+        payload = {
+            "ok": True,
+            "cameraReference": {
+                "lat": 50.0654226,
+                "lon": 14.3042639,
+                "altitudeM": 360.9,
+                "altitudeDatum": "WGS84_ELLIPSOID",
+                "source": "BROWSER_GEOLOCATION_MULTI_FIX",
+                "calibrationCompletedAt": "2026-09-30T07:30:37.409Z",
+                "orientation": {
+                    "homeTrueAzimuthDeg": 1.7,
+                    "homeElevationDeg": -5.5
+                }
+            }
+        }
+        with mock.patch.object(production_tracker, "read_json_url", return_value=payload):
+            camera = production_tracker.load_camera_reference("https://example.test", "pin")
+        self.assertEqual(camera.home_true_azimuth_deg, 0.0)
+        self.assertEqual(camera.home_elevation_deg, -5.5)
+        self.assertEqual(camera.latitude_deg, 50.0654226)
+        self.assertEqual(camera.longitude_deg, 14.3042639)
+        self.assertEqual(camera.altitude_ellipsoid_m, 360.9)
+
+    def test_true_north_relative_yaw_examples(self):
+        self.assertEqual(production_tracker.wrap180(30.0 - 0.0), 30.0)
+        self.assertEqual(production_tracker.wrap180(330.0 - 0.0), -30.0)
+        self.assertEqual(production_tracker.wrap180(0.0 - 0.0), 0.0)
 
 if __name__ == "__main__":
     unittest.main()
