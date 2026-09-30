@@ -326,8 +326,8 @@ class TrueNorthOperationalHomeTests(unittest.TestCase):
             camera = production_tracker.load_camera_reference("https://example.test", "pin")
         self.assertEqual(camera.home_true_azimuth_deg, 0.0)
         self.assertEqual(camera.home_elevation_deg, -2.5)
-        self.assertEqual(camera.latitude_deg, 50.0654226)
-        self.assertEqual(camera.longitude_deg, 14.3042639)
+        self.assertEqual(camera.latitude_deg, 50.0655668)
+        self.assertEqual(camera.longitude_deg, 14.3043564)
         self.assertEqual(camera.altitude_ellipsoid_m, 360.9)
 
     def test_true_north_relative_yaw_examples(self):
