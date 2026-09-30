@@ -394,9 +394,9 @@ class ZoomFramingOffsetTests(unittest.TestCase):
         self.assertEqual(production_tracker.ZOOM_PAN_OFFSET_AT_FULL_DEG * 0.0, 0.0)
         self.assertEqual(production_tracker.ZOOM_TILT_OFFSET_AT_FULL_DEG * 0.0, -0.0)
         self.assertEqual(production_tracker.ZOOM_PAN_OFFSET_AT_FULL_DEG * 0.5, -0.625)
-        self.assertEqual(production_tracker.ZOOM_TILT_OFFSET_AT_FULL_DEG * 0.5, -0.375)
+        self.assertEqual(production_tracker.ZOOM_TILT_OFFSET_AT_FULL_DEG * 0.5, -0.25)
         self.assertEqual(production_tracker.ZOOM_PAN_OFFSET_AT_FULL_DEG * 1.0, -1.25)
-        self.assertEqual(production_tracker.ZOOM_TILT_OFFSET_AT_FULL_DEG * 1.0, -0.75)
+        self.assertEqual(production_tracker.ZOOM_TILT_OFFSET_AT_FULL_DEG * 1.0, -0.5)
 
 if __name__ == "__main__":
     unittest.main()
