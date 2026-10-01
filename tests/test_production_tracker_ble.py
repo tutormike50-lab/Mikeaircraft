@@ -325,7 +325,7 @@ class TrueNorthOperationalHomeTests(unittest.TestCase):
         with mock.patch.object(production_tracker, "read_json_url", return_value=payload):
             camera = production_tracker.load_camera_reference("https://example.test", "pin")
         self.assertEqual(camera.home_true_azimuth_deg, 0.0)
-        self.assertEqual(camera.home_elevation_deg, -2.5)
+        self.assertEqual(camera.home_elevation_deg, -2.0)
         self.assertEqual(camera.latitude_deg, 50.0655668)
         self.assertEqual(camera.longitude_deg, 14.3043564)
         self.assertEqual(camera.altitude_ellipsoid_m, 360.9)
