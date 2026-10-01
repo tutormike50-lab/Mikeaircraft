@@ -138,6 +138,44 @@ class ProductionTrackingTests(unittest.TestCase):
         self.assertNotEqual(output.tilt_command, 0)
         self.assertFalse(controller.home_pitch_held)
 
+    def test_home_pitch_emits_one_pulse_then_zero_for_one_second(self):
+        controller = ControllerV1()
+        home = self.source.latest(self.t0)
+        controller.estimated_pitch_deg = -1.0
+        first = controller.step(home, 0.05)
+        self.assertEqual(first.tilt_command, 25)
+        settling = [controller.step(home, 0.05).tilt_command for _ in range(20)]
+        self.assertEqual(settling, [0] * 20)
+        self.assertAlmostEqual(controller.home_pitch_settle_remaining_s, 0.0)
+        self.assertEqual(controller.step(home, 0.05).tilt_command, 25)
+
+        negative = ControllerV1()
+        negative.estimated_pitch_deg = 1.0
+        self.assertEqual(negative.step(home, 0.05).tilt_command, -25)
+        self.assertEqual(negative.step(home, 0.05).tilt_command, 0)
+
+    def test_home_pitch_point_five_error_gets_isolated_pulse(self):
+        controller = ControllerV1()
+        home = self.source.latest(self.t0)
+        controller.estimated_pitch_deg = -0.50
+        self.assertEqual(controller.step(home, 0.05).tilt_command, 25)
+        self.assertEqual(controller.step(home, 0.05).tilt_command, 0)
+        self.assertFalse(controller.home_pitch_held)
+        self.assertAlmostEqual(controller.home_pitch_settle_remaining_s, 0.95)
+
+    def test_home_pitch_latches_after_settle_when_error_enters_threshold(self):
+        controller = ControllerV1()
+        home = self.source.latest(self.t0)
+        controller.estimated_pitch_deg = -1.0
+        self.assertEqual(controller.step(home, 0.05).tilt_command, 25)
+        for _ in range(20):
+            self.assertEqual(controller.step(home, 0.05).tilt_command, 0)
+        controller.estimated_pitch_deg = -0.35
+        settled = controller.step(home, 0.05)
+        self.assertEqual(settled.state, "HOLD_HOME")
+        self.assertEqual(settled.tilt_command, 0)
+        self.assertTrue(controller.home_pitch_held)
+
     def test_home_pitch_reopens_only_beyond_point_seven_five_degrees(self):
         controller = ControllerV1()
         home = self.source.latest(self.t0)
@@ -148,6 +186,8 @@ class ProductionTrackingTests(unittest.TestCase):
         self.assertEqual(reopened.state, "RETURN_HOME")
         self.assertNotEqual(reopened.tilt_command, 0)
         self.assertFalse(controller.home_pitch_held)
+        for _ in range(20):
+            self.assertEqual(controller.step(home, 0.05).tilt_command, 0)
         controller.estimated_pitch_deg = -0.35
         reentered = controller.step(home, 0.05)
         self.assertEqual(reentered.state, "HOLD_HOME")
@@ -167,15 +207,20 @@ class ProductionTrackingTests(unittest.TestCase):
         self.assertNotEqual(output.pan_command, 0)
         self.assertEqual(output.tilt_command, 0)
 
-    def test_aircraft_target_resets_home_pitch_hold(self):
+    def test_aircraft_target_resets_home_pitch_hold_and_settle(self):
         controller = ControllerV1()
         home = self.source.latest(self.t0)
         self.assertEqual(controller.step(home, 0.05).state, "HOLD_HOME")
         self.assertTrue(controller.home_pitch_held)
+        controller.estimated_pitch_deg = -1.0
+        self.assertEqual(controller.step(home, 0.05).tilt_command, 25)
+        self.assertFalse(controller.home_pitch_held)
+        self.assertEqual(controller.home_pitch_settle_remaining_s, 1.0)
         self.source.update(self.observation)
         output = controller.step(self.source.latest(self.t0), 0.05)
         self.assertEqual(output.state, "ACQUIRE")
         self.assertFalse(controller.home_pitch_held)
+        self.assertEqual(controller.home_pitch_settle_remaining_s, 0.0)
 
     def test_latency_is_applied_once_from_observation_timestamp(self):
         self.source.update(self.observation)

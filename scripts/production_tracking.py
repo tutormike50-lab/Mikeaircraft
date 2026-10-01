@@ -359,6 +359,7 @@ class ControllerV1:
     RS4_YAW_SIGN = 1
     RS4_PITCH_SIGN = 1
     YAW_DEG_S_PER_COMMAND = 0.063
+    HOME_PITCH_SETTLE_S = 1.0
 
     def __init__(self, pitch_actuator=None, acquire_kp=1.0, acquire_kd=0.5,
                  track_kp=0.45,
@@ -380,6 +381,7 @@ class ControllerV1:
         self.last_yaw_rate = 0.0
         self.inside_cycles = 0
         self.home_pitch_held = False
+        self.home_pitch_settle_remaining_s = 0.0
 
     def reset_target(self, aircraft_id):
         self.aircraft_id = aircraft_id
@@ -387,6 +389,7 @@ class ControllerV1:
         self.last_yaw_rate = 0.0
         self.inside_cycles = 0
         self.home_pitch_held = False
+        self.home_pitch_settle_remaining_s = 0.0
 
     def correct_telemetry(self, measured_yaw_relative_deg, measured_pitch_relative_deg,
                           blend=0.35):
@@ -408,9 +411,20 @@ class ControllerV1:
             if self.home_pitch_held:
                 if abs(pitch_error) > 0.75:
                     self.home_pitch_held = False
+                    self.home_pitch_settle_remaining_s = 0.0
+            if self.home_pitch_held:
+                tilt = 0
+            elif self.home_pitch_settle_remaining_s > 0.0:
+                self.home_pitch_settle_remaining_s = max(
+                    0.0, self.home_pitch_settle_remaining_s - dt_s
+                )
+                tilt = 0
             elif abs(pitch_error) <= 0.35:
                 self.home_pitch_held = True
-            tilt = 0 if self.home_pitch_held else self.pitch_actuator.command(pitch_error)
+                tilt = 0
+            else:
+                tilt = 25 if pitch_error > 0 else -25
+                self.home_pitch_settle_remaining_s = self.HOME_PITCH_SETTLE_S
             self.mode = "HOLD_HOME" if abs(yaw_error) <= 0.35 and self.home_pitch_held else "RETURN_HOME"
             if self.mode == "HOLD_HOME":
                 yaw_rate = 0.0
