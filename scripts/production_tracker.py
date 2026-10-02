@@ -371,6 +371,7 @@ class PitchAcquireDecision:
     physical_pitch_deg: object = None
     error_deg: object = None
     event: object = None
+    owns_tilt: bool = True
 
 
 class AltitudePitchAcquisition:
@@ -451,8 +452,11 @@ class AltitudePitchAcquisition:
             return PitchAcquireDecision(0, self.state, self.final_reason, 0.0,
                                         physical, error)
         if self.state == "ACQUIRED":
-            if (self.final_reason != "ON_TARGET" or error is None
-                    or abs(error) <= 1.5):
+            if self.final_reason == "ON_TARGET" and error is not None and abs(error) <= 1.5:
+                return PitchAcquireDecision(
+                    0, self.state, self.final_reason, 0.0, physical, error,
+                    owns_tilt=False)
+            if self.final_reason != "ON_TARGET" or error is None:
                 return PitchAcquireDecision(0, self.state, self.final_reason, 0.0,
                                             physical, error)
             self.state = "READY"
@@ -532,7 +536,9 @@ class AltitudePitchAcquisition:
 
 
 def apply_pitch_acquisition(controller_output, decision):
-    """Override only tilt; the b72738c pan output remains byte-for-byte numeric."""
+    """Let acquisition own tilt only while it is actively acquiring/recovering."""
+    if not decision.owns_tilt:
+        return controller_output
     return replace(controller_output, tilt_command=decision.command)
 
 
