@@ -98,8 +98,7 @@ class PiBridgeTests(unittest.TestCase):
         self.assertEqual(bridge.tracker_state, "FAULT")
         self.assertIn("code 1", bridge.fault)
         self.assertEqual(len(calls), 1)
-        bridge.reconcile({"desired": "STOPPED", "generation": 4})
-        bridge.reconcile({"desired": "TRACKING", "generation": 5})
+        bridge.start(5)
         self.assertEqual(len(calls), 2)
         bridge._close_output()
 
@@ -119,10 +118,150 @@ class PiBridgeTests(unittest.TestCase):
         self.assertIn("[REDACTED]", bridge.fault)
         report.assert_called_once_with(bridge.fault, flush=True)
 
+    def test_failed_first_read_does_not_authorise_old_persisted_tracking(self):
+        calls = []
+        bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.reconcile({"ok": False, "desired": "TRACKING", "generation": 21})
+        self.assertEqual(calls, [])
+        self.assertIsNone(bridge.startup_generations)
+
+        old = {"ok": True, "receivedAt": "2026-10-02T08:00:00Z",
+               "desired": "STOPPED", "generation": 8,
+               "direct": {"command": "TRACKING", "generation": 21,
+                          "aircraftId": "abc123", "updatedAt": "2026-10-02T07:55:00Z"},
+               "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                           "generation": 21, "aircraftId": "abc123"}}
+        bridge.reconcile(old)
+        self.assertEqual(calls, [])
+
+        fresh = dict(old)
+        fresh["direct"] = {"command": "TRACKING", "generation": 22,
+                           "aircraftId": "abc123", "updatedAt": "2026-10-02T08:00:05Z"}
+        fresh["control"] = {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                            "generation": 22, "aircraftId": "abc123"}
+        bridge.reconcile(fresh)
+        self.assertEqual(len(calls), 1)
+        bridge._close_output()
+
+    def test_default_first_read_does_not_make_later_old_tracking_fresh(self):
+        calls = []
+        bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.reconcile({"ok": True, "receivedAt": "2026-10-02T08:00:00Z",
+                          "desired": "STOPPED", "generation": 0, "updatedAt": None,
+                          "direct": {"command": "STOPPED", "generation": 0, "updatedAt": None},
+                          "control": {"owner": "PRODUCTION", "command": "STOPPED",
+                                      "generation": 0, "aircraftId": None}})
+        self.assertEqual(calls, [])
+
+        bridge.reconcile({"ok": True, "receivedAt": "2026-10-02T08:00:10Z",
+                          "desired": "STOPPED", "generation": 0,
+                          "direct": {"command": "TRACKING", "generation": 21,
+                                     "aircraftId": "abc123", "updatedAt": "2026-10-02T07:55:00Z"},
+                          "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                                      "generation": 21, "aircraftId": "abc123"}})
+        self.assertEqual(calls, [])
+
+        bridge.reconcile({"ok": True, "receivedAt": "2026-10-02T08:00:11Z",
+                          "desired": "STOPPED", "generation": 0,
+                          "direct": {"command": "TRACKING", "generation": 22,
+                                     "aircraftId": "abc123", "updatedAt": "2026-10-02T08:00:05Z"},
+                          "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                                      "generation": 22, "aircraftId": "abc123"}})
+        self.assertEqual(len(calls), 1)
+        bridge._close_output()
+
+    def test_reboot_blocks_persisted_direct_tracking_until_new_generation(self):
+        calls = []
+        bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        persisted = {"desired": "STOPPED", "generation": 8,
+                     "direct": {"command": "TRACKING", "generation": 21,
+                                "aircraftId": "abc123", "updatedAt": "2026-10-02T07:55:00Z"},
+                     "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                                 "generation": 21, "aircraftId": "abc123"}}
+        persisted["ok"] = True
+        persisted["receivedAt"] = "2026-10-02T08:00:00Z"
+        bridge.reconcile(persisted)
+        self.assertEqual(calls, [])
+        self.assertEqual(bridge.tracker_state, "STOPPED")
+
+        fresh = dict(persisted)
+        fresh["direct"] = {"command": "TRACKING", "generation": 22,
+                           "aircraftId": "abc123", "updatedAt": "2026-10-02T08:00:05Z"}
+        fresh["control"] = {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                            "generation": 22, "aircraftId": "abc123"}
+        bridge.reconcile(fresh)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("--direct", calls[0])
+        self.assertEqual(bridge.process.stdin.value, "TRACK CURRENT\n")
+        bridge._close_output()
+
+    def test_reboot_blocks_persisted_production_tracking_until_new_generation(self):
+        calls = []
+        bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.reconcile({"ok": True, "receivedAt": "2026-10-02T08:00:00Z",
+                          "desired": "TRACKING", "generation": 31,
+                          "updatedAt": "2026-10-02T07:55:00Z",
+                          "direct": {"command": "STOPPED", "generation": 7},
+                          "control": {"owner": "PRODUCTION", "command": "TRACKING",
+                                      "generation": 31, "aircraftId": None}})
+        self.assertEqual(calls, [])
+        self.assertEqual(bridge.tracker_state, "STOPPED")
+
+        bridge.reconcile({"desired": "TRACKING", "generation": 32,
+                          "updatedAt": "2026-10-02T08:00:05Z",
+                          "direct": {"command": "STOPPED", "generation": 7},
+                          "control": {"owner": "PRODUCTION", "command": "TRACKING",
+                                      "generation": 32, "aircraftId": None}})
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("--direct", calls[0])
+        bridge._close_output()
+
+    def test_reboot_stopped_state_remains_stopped(self):
+        calls = []
+        bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.reconcile({"ok": True, "receivedAt": "2026-10-02T08:00:00Z",
+                          "desired": "STOPPED", "generation": 41,
+                          "updatedAt": "2026-10-02T07:59:00Z",
+                          "direct": {"command": "STOPPED", "generation": 13,
+                                     "updatedAt": "2026-10-02T07:59:00Z"},
+                          "control": {"owner": "DIRECT_TRACKER", "command": "STOPPED",
+                                      "generation": 13, "aircraftId": None}})
+        self.assertEqual(calls, [])
+        self.assertEqual(bridge.tracker_state, "STOPPED")
+        self.assertEqual(bridge.startup_generations,
+                         {"DIRECT": 13, "PRODUCTION": 41})
+
+    def test_reboot_gate_baselines_both_owners_from_first_cloud_state(self):
+        calls = []
+        bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.reconcile({"ok": True, "receivedAt": "2026-10-02T08:00:00Z",
+                          "desired": "STOPPED", "generation": 50,
+                          "updatedAt": "2026-10-02T07:59:00Z",
+                          "direct": {"command": "STOPPED", "generation": 20,
+                                     "updatedAt": "2026-10-02T07:59:00Z"},
+                          "control": {"owner": "DIRECT_TRACKER", "command": "STOPPED",
+                                      "generation": 20, "aircraftId": None}})
+        bridge.reconcile({"desired": "STOPPED", "generation": 50,
+                          "direct": {"command": "TRACKING", "generation": 21,
+                                     "aircraftId": "abc123", "updatedAt": "2026-10-02T08:00:05Z"},
+                          "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
+                                      "generation": 21, "aircraftId": "abc123"}})
+        self.assertEqual(len(calls), 1)
+        bridge._close_output()
+
     def test_direct_stop_keeps_live_direct_tracker_running_for_home_return(self):
         calls = []
         bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.reconcile({"ok": True, "receivedAt": "2026-10-02T08:00:00Z",
+                          "desired": "STOPPED", "generation": 8,
+                          "updatedAt": "2026-10-02T07:59:00Z",
+                          "direct": {"command": "STOPPED", "generation": 1,
+                                     "updatedAt": "2026-10-02T07:59:00Z"},
+                          "control": {"owner": "DIRECT_TRACKER", "command": "STOPPED",
+                                      "generation": 1, "aircraftId": None}})
         bridge.reconcile({"desired": "STOPPED", "generation": 8,
+                          "direct": {"command": "TRACKING", "generation": 2,
+                                     "aircraftId": "abc123", "updatedAt": "2026-10-02T08:00:05Z"},
                           "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
                                       "generation": 2, "aircraftId": "abc123"}})
         self.assertIn("--direct", calls[0])
@@ -138,7 +277,16 @@ class PiBridgeTests(unittest.TestCase):
     def test_click_control_starts_direct_tracker_without_normal_start(self):
         calls = []
         bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.reconcile({"ok": True, "receivedAt": "2026-10-02T08:00:00Z",
+                          "desired": "STOPPED", "generation": 0,
+                          "updatedAt": "2026-10-02T07:59:00Z",
+                          "direct": {"command": "STOPPED", "generation": 10,
+                                     "updatedAt": "2026-10-02T07:59:00Z"},
+                          "control": {"owner": "DIRECT_TRACKER", "command": "STOPPED",
+                                      "generation": 10, "aircraftId": None}})
         bridge.reconcile({"desired": "STOPPED", "generation": 0,
+                          "direct": {"command": "TRACKING", "generation": 11,
+                                     "aircraftId": "abc123", "updatedAt": "2026-10-02T08:00:05Z"},
                           "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
                                       "generation": 11, "aircraftId": "abc123"}})
         self.assertEqual(bridge.tracker_state, "STARTING")
@@ -148,10 +296,21 @@ class PiBridgeTests(unittest.TestCase):
     def test_clicking_b_transfers_direct_target_without_normal_tracker_takeover(self):
         calls = []
         bridge, _ = self.make_bridge(lambda command, **kwargs: calls.append(command) or FakeProcess())
+        bridge.reconcile({"ok": True, "receivedAt": "2026-10-02T08:00:00Z",
+                          "desired": "TRACKING", "generation": 99,
+                          "updatedAt": "2026-10-02T07:59:00Z",
+                          "direct": {"command": "STOPPED", "generation": 11,
+                                     "updatedAt": "2026-10-02T07:59:00Z"},
+                          "control": {"owner": "DIRECT_TRACKER", "command": "STOPPED",
+                                      "generation": 11, "aircraftId": None}})
         bridge.reconcile({"desired": "TRACKING", "generation": 99,
+                          "direct": {"command": "TRACKING", "generation": 12,
+                                     "aircraftId": "abc123", "updatedAt": "2026-10-02T08:00:05Z"},
                           "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
                                       "generation": 12, "aircraftId": "abc123"}})
         bridge.reconcile({"desired": "TRACKING", "generation": 100,
+                          "direct": {"command": "TRACKING", "generation": 13,
+                                     "aircraftId": "def456", "updatedAt": "2026-10-02T08:00:06Z"},
                           "control": {"owner": "DIRECT_TRACKER", "command": "TRACKING",
                                       "generation": 13, "aircraftId": "def456"}})
         self.assertEqual(len(calls), 1)

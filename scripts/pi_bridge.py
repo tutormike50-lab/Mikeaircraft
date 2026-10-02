@@ -3,6 +3,7 @@
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 import signal
 import subprocess
@@ -82,6 +83,8 @@ class PiBridge:
         self.attempted_generation = None
         self.process_mode = None
         self.telemetry = None
+        self.startup_generations = None
+        self.startup_received_at = None
         self.release_manager = ReleaseManager(self.repo_dir, self.repo_dir)
         self.health_path = self.repo_dir / "var" / "releases" / "bridge-health.json"
         self.tracker_check_ok, self.tracker_check_detail = self._check_tracker()
@@ -220,30 +223,81 @@ class PiBridge:
             self.fault += ": " + detail
         print(self.fault, flush=True)
 
+    @staticmethod
+    def _parse_cloud_time(value):
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+
+    def _capture_startup_generations(self, desired):
+        if self.startup_generations is not None:
+            return True
+        received_at = self._parse_cloud_time(desired.get("receivedAt"))
+        if desired.get("ok") is not True or received_at is None:
+            return False
+        direct = desired.get("direct") or {}
+        self.startup_generations = {
+            "DIRECT": int(direct.get("generation") or 0),
+            "PRODUCTION": int(desired.get("generation") or 0),
+        }
+        self.startup_received_at = received_at
+        return True
+
+    def _fresh_generation_since_startup(self, mode, generation, updated_at):
+        command_time = self._parse_cloud_time(updated_at)
+        return (int(generation or 0) > self.startup_generations[mode]
+                and command_time is not None
+                and command_time > self.startup_received_at)
+
     def reconcile(self, desired):
+        if not self._capture_startup_generations(desired):
+            self.stop()
+            return
         control = desired.get("control") or {}
         if control:
             if (control.get("owner") == "DIRECT_TRACKER" and
                     control.get("command") == "TRACKING" and control.get("aircraftId")):
-                self.start(int(control.get("generation") or 0), direct=True)
+                generation = int(control.get("generation") or 0)
+                if self._fresh_generation_since_startup(
+                        "DIRECT", generation, (desired.get("direct") or {}).get("updatedAt")):
+                    self.start(generation, direct=True)
+                else:
+                    self.stop()
             elif (control.get("owner") == "DIRECT_TRACKER" and
                     control.get("command") == "STOPPED"):
                 if not (self.process is not None and self.process.poll() is None
                         and self.process_mode == "DIRECT"):
                     self.stop()
             elif control.get("owner") == "PRODUCTION" and control.get("command") == "TRACKING":
-                self.start(int(control.get("generation") or 0), direct=False)
+                generation = int(control.get("generation") or 0)
+                if self._fresh_generation_since_startup(
+                        "PRODUCTION", generation, desired.get("updatedAt")):
+                    self.start(generation, direct=False)
+                else:
+                    self.stop()
             else:
                 self.stop()
             return
         direct = desired.get("direct") or {}
         if direct.get("updatedAt"):
             if direct.get("command") == "TRACKING" and direct.get("aircraftId"):
-                self.start(int(direct.get("generation") or 0), direct=True)
+                generation = int(direct.get("generation") or 0)
+                if self._fresh_generation_since_startup(
+                        "DIRECT", generation, (desired.get("direct") or {}).get("updatedAt")):
+                    self.start(generation, direct=True)
+                else:
+                    self.stop()
             else:
                 self.stop()
         elif desired.get("desired") == "TRACKING":
-            self.start(int(desired.get("generation") or 0), direct=False)
+            generation = int(desired.get("generation") or 0)
+            if self._fresh_generation_since_startup("PRODUCTION", generation):
+                self.start(generation, direct=False)
+            else:
+                self.stop()
         else:
             self.stop()
 
